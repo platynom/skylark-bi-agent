@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import time
 from typing import Any, Literal
 
@@ -40,6 +42,27 @@ class AskRequest(BaseModel):
 
 class LeadershipRequest(BaseModel):
     focus: str | None = Field(default=None, max_length=1000)
+
+
+class LeadershipGemini(Gemini):
+    """Gemini client allowing narrative token budget override via LEADERSHIP_MAX_TOKENS."""
+    def generate(self, system: str, user: str, *, temperature: float = 0.1, max_tokens: int = 2048, json_mode: bool = False) -> str:
+        env_tokens = os.environ.get("LEADERSHIP_MAX_TOKENS")
+        if env_tokens and env_tokens.strip().isdigit():
+            max_tokens = int(env_tokens.strip())
+        return super().generate(system, user, temperature=temperature, max_tokens=max_tokens, json_mode=json_mode)
+
+
+def _clean_nan(obj: Any) -> Any:
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _clean_nan(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_clean_nan(v) for v in obj]
+    return obj
 
 
 def _records(frame: pd.DataFrame | None) -> list[dict[str, Any]]:
@@ -115,10 +138,10 @@ def leadership(request: LeadershipRequest):
     started = time.perf_counter()
     try:
         load = get_warehouse()
-        llm = Gemini()
+        llm = LeadershipGemini()
         narrative, metrics = generate_update(load.warehouse, llm=llm, focus=request.focus)
         return {
-            "narrative": narrative, "metrics": metrics, "model": llm._working_model,
+            "narrative": narrative, "metrics": _clean_nan(metrics), "model": llm._working_model,
             **_meta(load),
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
         }
