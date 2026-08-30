@@ -28,8 +28,12 @@ DEALS_BOARD_NAME = get("DEALS_BOARD_NAME", "Deals")
 WORK_ORDERS_BOARD_NAME = get("WORK_ORDERS_BOARD_NAME", "Work Orders")
 
 GEMINI_API_KEY = get("GEMINI_API_KEY")
-GEMINI_MODEL = get("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_FALLBACK_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest"]
+GEMINI_MODEL = get("GEMINI_MODEL", "gemini-3.1-flash-lite")
+GEMINI_FALLBACK_MODELS = [
+    "gemini-3.5-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+]
 
 CACHE_TTL_SECONDS = int(get("CACHE_TTL_SECONDS", 300))
 MAX_SQL_RETRIES = int(get("MAX_SQL_RETRIES", 2))
