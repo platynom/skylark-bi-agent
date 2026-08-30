@@ -8,7 +8,7 @@ and billing).
 > → interprets the question, writes SQL against the live boards, runs it, and answers with
 > context **plus the data-quality caveats that qualify the number.**
 
-**Live app:** _<paste your Streamlit URL here>_
+**Live app:** [https://skylarkdro.streamlit.app](https://skylarkdro.streamlit.app)
 
 ---
 
