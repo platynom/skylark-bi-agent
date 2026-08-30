@@ -27,12 +27,12 @@ type Health = {
 };
 type AskResult = {
   action: string; intent?: string | null; sql?: string | null; answer?: string | null;
-  assumptions: string[]; rows: Row[]; rowcount: number; columns?: string[];
-  caveats?: string[]; attempts: { sql: string; error: string }[]; clarify?: string | null;
+  assumptions: string[]; rows: Row[]; rowcount: number;
+  attempts: { sql: string; error: string }[]; clarify?: string | null;
   options?: string[]; error?: string | null; model?: string | null;
   cache: string; latency_ms: number; warning?: string | null;
 };
-type Message = { role: "user" | "assistant"; content: string; result?: AskResult; narrating?: boolean };
+type Message = { role: "user" | "assistant"; content: string; result?: AskResult };
 type DataResponse = { table: string; rows: Row[]; rowcount: number; columns: string[]; cache: string };
 
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -47,17 +47,8 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 function StatusPill({ value }: { value: string }) {
-  const isHit = value === "hit";
-  const isQCache = value === "question_cache";
-  return (
-    <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${
-        isHit || isQCache ? "bg-mint text-forest" : "bg-amber/15 text-amber"
-      }`}
-    >
-      {isQCache ? "cached" : value}
-    </span>
-  );
+  const good = value === "hit";
+  return <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${good ? "bg-mint text-forest" : "bg-amber/15 text-amber"}`}>{value}</span>;
 }
 
 function DataTable({ rows, columns }: { rows: Row[]; columns?: string[] }) {
@@ -67,17 +58,11 @@ function DataTable({ rows, columns }: { rows: Row[]; columns?: string[] }) {
     <div className="max-h-[32rem] w-full overflow-auto rounded-xl border border-forest/10 bg-white shadow-inner">
       <table className="min-w-full w-full whitespace-nowrap text-left text-xs">
         <thead className="sticky top-0 z-10 bg-forest text-white">
-          <tr>{keys.map((key) => <th key={key} className="px-4 py-3 font-semibold tracking-wider">{key === "monday_item_url" ? "source" : key}</th>)}</tr>
+          <tr>{keys.map((key) => <th key={key} className="px-4 py-3 font-semibold tracking-wider">{key}</th>)}</tr>
         </thead>
         <tbody className="divide-y divide-forest/5">{rows.map((row, index) => (
           <tr key={index} className="odd:bg-paper/60 hover:bg-mint/40 transition-colors">
-            {keys.map((key) => <td key={key} className="max-w-md overflow-hidden text-ellipsis px-4 py-2.5">{
-              row[key] == null
-                ? <span className="font-mono text-slate-300">NULL</span>
-                : key === "monday_item_url"
-                  ? <a href={String(row[key])} target="_blank" rel="noreferrer" className="font-semibold text-forest underline decoration-moss underline-offset-2 hover:text-moss">Open item ↗</a>
-                  : String(row[key])
-            }</td>)}
+            {keys.map((key) => <td key={key} className="max-w-md overflow-hidden text-ellipsis px-4 py-2.5">{row[key] == null ? <span className="font-mono text-slate-300">NULL</span> : String(row[key])}</td>)}
           </tr>
         ))}</tbody>
       </table>
@@ -153,76 +138,16 @@ export default function Home() {
   useEffect(() => { void loadHealth(); }, [loadHealth]);
 
   const sendQuestion = async (text: string) => {
-    const clean = text.trim();
-    if (!clean || asking) return;
+    const clean = text.trim(); if (!clean || asking) return;
     const prior = messages.map(({ role, content }) => ({ role, content }));
     setMessages((old) => [...old, { role: "user", content: clean }]);
-    setQuestion("");
-    setAsking(true);
-    setError("");
+    setQuestion(""); setAsking(true); setError("");
     try {
-      const result = await api<AskResult>("/api/ask", {
-        method: "POST",
-        body: JSON.stringify({ question: clean, history: prior }),
-      });
-      const initialContent = result.answer || result.clarify || result.error || "";
-      const needsNarration = !initialContent && result.action === "sql";
-
-      setMessages((old) => [
-        ...old,
-        {
-          role: "assistant",
-          content: initialContent,
-          result,
-          narrating: needsNarration,
-        },
-      ]);
-
-      if (needsNarration) {
-        try {
-          const narration = await api<{ answer: string; model?: string; latency_ms: number }>("/api/narrate", {
-            method: "POST",
-            body: JSON.stringify({
-              question: clean,
-              intent: result.intent,
-              sql: result.sql,
-              assumptions: result.assumptions,
-              rows: result.rows,
-              caveats: result.caveats || [],
-              history: prior,
-            }),
-          });
-          setMessages((old) =>
-            old.map((m, i) =>
-              i === old.length - 1
-                ? {
-                    ...m,
-                    content: narration.answer || "No narrative produced.",
-                    narrating: false,
-                    result: m.result ? { ...m.result, model: narration.model || m.result.model } : m.result,
-                  }
-                : m
-            )
-          );
-        } catch {
-          setMessages((old) =>
-            old.map((m, i) =>
-              i === old.length - 1
-                ? {
-                    ...m,
-                    content: "SQL executed and verified.",
-                    narrating: false,
-                  }
-                : m
-            )
-          );
-        }
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Question failed");
-    } finally {
-      setAsking(false);
-    }
+      const result = await api<AskResult>("/api/ask", { method: "POST", body: JSON.stringify({ question: clean, history: prior }) });
+      const content = result.answer || result.clarify || result.error || "No answer was produced.";
+      setMessages((old) => [...old, { role: "assistant", content, result }]);
+    } catch (e) { setError(e instanceof Error ? e.message : "Question failed"); }
+    finally { setAsking(false); }
   };
 
   const generateLeadership = async () => {
@@ -271,25 +196,7 @@ export default function Home() {
               </div>
             </div>}
             <div className="space-y-5 w-full">{messages.map((message, index) => <article key={index} className={`w-full rounded-2xl p-5 sm:p-7 shadow-panel transition ${message.role === "user" ? "ml-auto max-w-3xl border border-forest/20 bg-forest text-white" : "border border-forest/10 bg-white"}`}>
-              {message.role === "assistant" ? (
-                <div>
-                  {message.narrating ? (
-                    <div className="flex items-center gap-2.5 py-2 text-sm text-slate-500">
-                      <span className="h-2 w-2 animate-ping rounded-full bg-moss" />
-                      <span className="font-semibold text-forest">Synthesizing executive summary…</span>
-                    </div>
-                  ) : message.content ? (
-                    <div className="prose-skylark text-sm w-full max-w-none">
-                      <ReactMarkdown>{message.content}</ReactMarkdown>
-                    </div>
-                  ) : null}
-                </div>
-              ) : (
-                <div className="flex items-start gap-2.5">
-                  <span className="rounded-md bg-white/20 px-2 py-0.5 text-xs font-bold text-mint">You</span>
-                  <p className="text-sm sm:text-base font-medium">{message.content}</p>
-                </div>
-              )}
+              {message.role === "assistant" ? <div className="prose-skylark text-sm w-full max-w-none"><ReactMarkdown>{message.content}</ReactMarkdown></div> : <div className="flex items-start gap-2.5"><span className="rounded-md bg-white/20 px-2 py-0.5 text-xs font-bold text-mint">You</span><p className="text-sm sm:text-base font-medium">{message.content}</p></div>}
               {message.result && <div className="mt-5 border-t border-forest/10 pt-5 space-y-4 w-full">
                 <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500"><StatusPill value={message.result.cache} /><span>{(message.result.latency_ms / 1000).toFixed(1)}s</span>{message.result.model && <span className="font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded">{message.result.model}</span>}{message.result.action === "unsupported" && <span className="rounded bg-amber/15 px-2 py-0.5 font-bold uppercase tracking-wider text-amber">unsupported</span>}</div>
                 {!!message.result.assumptions?.length && <div className="rounded-xl border border-forest/10 bg-paper/80 p-3 text-xs text-slate-600"><strong className="text-forest">Assumptions:</strong> {message.result.assumptions.join("; ")}</div>}

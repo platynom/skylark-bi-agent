@@ -10,5 +10,3 @@ venv/
 node_modules/
 .env*.local
 npm-debug.log*
-tests/.eval_cache.json
-tests/.holdout_eval_cache.json

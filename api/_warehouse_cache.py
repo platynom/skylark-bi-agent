@@ -5,12 +5,9 @@ paused, stale, or unavailable, callers still receive a live monday.com warehouse
 """
 from __future__ import annotations
 
-import base64
 import json
 import logging
 import os
-import tempfile
-import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -20,11 +17,11 @@ import pandas as pd
 import requests
 
 from agent.normalize import ColumnQuality, TableQuality
-from agent.warehouse import Warehouse, build_warehouse, quality_summary, schema_document
+from agent.warehouse import Warehouse, build_warehouse, quality_summary
 
 LOGGER = logging.getLogger("skylark.warehouse_cache")
-CACHE_KEY = "skylark:warehouse:v2"
-CACHE_TTL_SECONDS = 1800
+CACHE_KEY = "skylark:warehouse:v1"
+CACHE_TTL_SECONDS = 300
 REQUEST_TIMEOUT_SECONDS = 8
 
 
@@ -68,66 +65,21 @@ def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
-def _df_to_parquet_b64(df: pd.DataFrame) -> str:
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
-        path = tf.name.replace("\\", "/")
-    try:
-        con = duckdb.connect(":memory:")
-        con.register("df_view", df)
-        con.execute(f"COPY df_view TO '{path}' (FORMAT PARQUET)")
-        with open(path, "rb") as f:
-            data = f.read()
-        return base64.b64encode(data).decode("ascii")
-    finally:
-        if os.path.exists(path):
-            os.remove(path)
-
-
-def _parquet_b64_to_df(b64_str: str, dtypes: dict[str, str] | None = None) -> pd.DataFrame:
-    raw = base64.b64decode(b64_str.encode("ascii"))
-    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
-        tf.write(raw)
-        path = tf.name.replace("\\", "/")
-    try:
-        con = duckdb.connect(":memory:")
-        df = con.execute(f"SELECT * FROM read_parquet('{path}')").df()
-        if dtypes:
-            for col, dtype in dtypes.items():
-                if col in df:
-                    if "datetime" in dtype:
-                        df[col] = pd.to_datetime(df[col], errors="coerce")
-                    elif dtype.startswith(("float", "int", "Int", "UInt")):
-                        df[col] = pd.to_numeric(df[col], errors="coerce")
-                        try:
-                            df[col] = df[col].astype(dtype)
-                        except (TypeError, ValueError):
-                            pass
-                    elif dtype in ("bool", "boolean"):
-                        df[col] = df[col].astype("boolean" if df[col].isna().any() else "bool")
-                    elif dtype.startswith("string"):
-                        df[col] = df[col].astype("string")
-        return df
-    finally:
-        if os.path.exists(path):
-            os.remove(path)
-
-
 def _frame_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     return json.loads(df.to_json(orient="records", date_format="iso"))
 
 
 def _serialize(wh: Warehouse) -> dict[str, Any]:
     return {
-        "version": 2,
-        "parquet": {
-            "deals": _df_to_parquet_b64(wh.deals),
-            "work_orders": _df_to_parquet_b64(wh.work_orders),
+        "version": 1,
+        "frames": {
+            "deals": _frame_records(wh.deals),
+            "work_orders": _frame_records(wh.work_orders),
         },
         "dtypes": {
             "deals": {column: str(dtype) for column, dtype in wh.deals.dtypes.items()},
             "work_orders": {column: str(dtype) for column, dtype in wh.work_orders.dtypes.items()},
         },
-        "schema_document": schema_document(wh),
         "quality_summary": quality_summary(wh),
         "quality_detail": {name: asdict(profile) for name, profile in wh.quality.items()},
         "board_ids": wh.board_ids,
@@ -166,18 +118,11 @@ def _restore_quality(raw: dict[str, Any]) -> dict[str, TableQuality]:
 
 
 def _deserialize(payload: dict[str, Any], fetched_at: datetime) -> Warehouse:
-    version = payload.get("version")
-    if version == 2 and "parquet" in payload:
-        dtypes = payload["dtypes"]
-        deals = _parquet_b64_to_df(payload["parquet"]["deals"], dtypes["deals"])
-        work_orders = _parquet_b64_to_df(payload["parquet"]["work_orders"], dtypes["work_orders"])
-    elif version == 1 and "frames" in payload:
-        frames, dtypes = payload["frames"], payload["dtypes"]
-        deals = _restore_frame(frames["deals"], dtypes["deals"])
-        work_orders = _restore_frame(frames["work_orders"], dtypes["work_orders"])
-    else:
+    if payload.get("version") != 1:
         raise ValueError("Unsupported warehouse cache version")
-
+    frames, dtypes = payload["frames"], payload["dtypes"]
+    deals = _restore_frame(frames["deals"], dtypes["deals"])
+    work_orders = _restore_frame(frames["work_orders"], dtypes["work_orders"])
     con = duckdb.connect(":memory:")
     con.register("deals_df", deals)
     con.register("work_orders_df", work_orders)
@@ -190,7 +135,6 @@ def _deserialize(payload: dict[str, Any], fetched_at: datetime) -> Warehouse:
         quality=_restore_quality(payload["quality_detail"]),
         loaded_at=fetched_at.timestamp(),
         board_ids={str(k): str(v) for k, v in payload["board_ids"].items()},
-        _schema_doc=payload.get("schema_document"),
     )
 
 
@@ -258,105 +202,3 @@ def get_warehouse(*, force_refresh: bool = False) -> WarehouseLoad:
             warning = "Live data loaded, but the Supabase cache write failed."
             LOGGER.warning("%s (%s)", warning, type(exc).__name__)
     return WarehouseLoad(wh, status, fetched_at, warning)
-
-
-QUESTION_CACHE_KEY = "skylark:qcache:v1"
-QUESTION_CACHE_TTL_SECONDS = 900
-_LOCAL_QCACHE: dict[str, tuple[dict[str, Any], float]] = {}
-
-
-def normalize_question(q: str) -> str:
-    import re
-    cleaned = re.sub(r"[^\w\s]", " ", q.lower())
-    return re.sub(r"\s+", " ", cleaned).strip()
-
-
-def get_cached_question(norm_q: str) -> dict[str, Any] | None:
-    now = time.time()
-    if norm_q in _LOCAL_QCACHE:
-        val, ts = _LOCAL_QCACHE[norm_q]
-        if now - ts <= QUESTION_CACHE_TTL_SECONDS:
-            return dict(val)
-        _LOCAL_QCACHE.pop(norm_q, None)
-
-    url, key = _supabase_settings()
-    if not url or not key:
-        return None
-
-    try:
-        response = requests.get(
-            _table_url(url),
-            headers=_headers(key),
-            params={"key": f"eq.{QUESTION_CACHE_KEY}", "select": "payload,fetched_at", "limit": "1"},
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        if response.status_code == 200:
-            rows = response.json()
-            if rows:
-                payload = rows[0].get("payload") or {}
-                entry = payload.get(norm_q)
-                if entry and isinstance(entry, dict):
-                    cached_at_str = entry.get("cached_at")
-                    if cached_at_str:
-                        cached_at = datetime.fromisoformat(cached_at_str.replace("Z", "+00:00"))
-                        if (datetime.now(timezone.utc) - cached_at).total_seconds() <= QUESTION_CACHE_TTL_SECONDS:
-                            data = entry.get("data")
-                            if data:
-                                _LOCAL_QCACHE[norm_q] = (data, now)
-                                return dict(data)
-    except Exception as exc:
-        LOGGER.debug("Question cache read error: %s", exc)
-    return None
-
-
-def set_cached_question(norm_q: str, response_data: dict[str, Any]) -> None:
-    import time
-    now = time.time()
-    _LOCAL_QCACHE[norm_q] = (dict(response_data), now)
-
-    url, key = _supabase_settings()
-    if not url or not key:
-        return
-
-    try:
-        current_payload: dict[str, Any] = {}
-        read_resp = requests.get(
-            _table_url(url),
-            headers=_headers(key),
-            params={"key": f"eq.{QUESTION_CACHE_KEY}", "select": "payload", "limit": "1"},
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        if read_resp.status_code == 200:
-            rows = read_resp.json()
-            if rows and isinstance(rows[0].get("payload"), dict):
-                current_payload = rows[0]["payload"]
-
-        cutoff = datetime.now(timezone.utc).timestamp() - QUESTION_CACHE_TTL_SECONDS
-        cleaned_payload = {}
-        for k, v in current_payload.items():
-            if isinstance(v, dict) and "cached_at" in v:
-                try:
-                    ts = datetime.fromisoformat(v["cached_at"].replace("Z", "+00:00")).timestamp()
-                    if ts >= cutoff:
-                        cleaned_payload[k] = v
-                except Exception:
-                    pass
-
-        cleaned_payload[norm_q] = {
-            "data": response_data,
-            "cached_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        requests.post(
-            _table_url(url),
-            headers={**_headers(key), "Prefer": "resolution=merge-duplicates,return=minimal"},
-            params={"on_conflict": "key"},
-            json={
-                "key": QUESTION_CACHE_KEY,
-                "payload": cleaned_payload,
-                "fetched_at": datetime.now(timezone.utc).isoformat(),
-            },
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-    except Exception as exc:
-        LOGGER.debug("Question cache write error: %s", exc)
