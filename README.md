@@ -139,7 +139,7 @@ MONDAY_API_TOKEN=... GEMINI_API_KEY=... \
   python scripts/smoke_test.py                   # live end-to-end benchmark
 ```
 
-33 checks covering value coercion, header-row removal, unusable-column detection, unit
+31 checks covering value coercion, header-row removal, unusable-column detection, unit
 splitting, derived fiscal columns, and SQL execution — ending with a **ground-truth
 reconciliation** that compares the agent's open-pipeline count and value against a direct
 pandas sum over the raw CSV. They must match to the rupee.
