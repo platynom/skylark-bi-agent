@@ -50,7 +50,7 @@ RULES
    question at a time.
 10. Return at most 200 rows. Aggregate rather than dumping raw rows unless the user
     explicitly asks for a list.
-11. When a question asks for a singular superlative (e.g. "the largest", "top", "highest", "lowest", "best", or "which deal owner has the largest X"), ORDER BY the metric DESC and use LIMIT 1 to return exactly one row, unless the user explicitly asked for a ranking, breakdown, or list.
+11. Apply LIMIT 1 ONLY when the question specifically asks for a single individual record or single named entity (e.g. "which deal owner has the largest X", "our single biggest deal", "which customer owes the most"). DO NOT apply LIMIT 1 when the question asks about concentration, distribution, breakdown, ranking, mix, comparison, or share across categories/sectors (e.g. "which sector is receivable concentrated in" requires a full breakdown by sector so the relative concentration and total are both visible).
 
 OUTPUT SHAPES
 {"action":"sql","intent":"<one line: what you are computing>","sql":"<query>",
