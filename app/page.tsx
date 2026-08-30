@@ -55,14 +55,14 @@ function DataTable({ rows, columns }: { rows: Row[]; columns?: string[] }) {
   const keys = columns || (rows[0] ? Object.keys(rows[0]) : []);
   if (!rows.length) return <p className="py-5 text-sm text-slate-500">No rows returned.</p>;
   return (
-    <div className="max-h-[32rem] overflow-auto rounded-xl border border-forest/10 bg-white">
-      <table className="min-w-full whitespace-nowrap text-left text-xs">
+    <div className="max-h-[32rem] w-full overflow-auto rounded-xl border border-forest/10 bg-white shadow-inner">
+      <table className="min-w-full w-full whitespace-nowrap text-left text-xs">
         <thead className="sticky top-0 z-10 bg-forest text-white">
-          <tr>{keys.map((key) => <th key={key} className="px-3 py-2.5 font-semibold">{key}</th>)}</tr>
+          <tr>{keys.map((key) => <th key={key} className="px-4 py-3 font-semibold tracking-wider">{key}</th>)}</tr>
         </thead>
-        <tbody>{rows.map((row, index) => (
-          <tr key={index} className="border-b border-forest/5 odd:bg-paper/60 hover:bg-mint/40">
-            {keys.map((key) => <td key={key} className="max-w-72 overflow-hidden text-ellipsis px-3 py-2">{row[key] == null ? <span className="text-slate-300">NULL</span> : String(row[key])}</td>)}
+        <tbody className="divide-y divide-forest/5">{rows.map((row, index) => (
+          <tr key={index} className="odd:bg-paper/60 hover:bg-mint/40 transition-colors">
+            {keys.map((key) => <td key={key} className="max-w-md overflow-hidden text-ellipsis px-4 py-2.5">{row[key] == null ? <span className="font-mono text-slate-300">NULL</span> : String(row[key])}</td>)}
           </tr>
         ))}</tbody>
       </table>
@@ -170,51 +170,57 @@ export default function Home() {
   ] as [Tab, string][]), []);
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen flex flex-col lg:flex-row">
       <Sidebar health={health} loading={loadingHealth} refresh={() => void loadHealth(true)} />
-      <main className="px-5 py-8 sm:px-8 lg:ml-[19rem] lg:px-12 lg:py-10">
-        <header className="mx-auto mb-8 max-w-6xl">
-          <p className="mb-2 text-xs font-bold uppercase tracking-[.22em] text-moss">Live operations intelligence</p>
-          <h1 className="max-w-3xl text-3xl font-black tracking-[-.04em] text-forest sm:text-5xl">Ask the business. Inspect the evidence.</h1>
-          <p className="mt-3 max-w-2xl text-sm leading-relaxed text-slate-600 sm:text-base">Founder-level answers over live monday.com boards, with every SQL query and data-quality limitation visible.</p>
-        </header>
-        <div className="mx-auto max-w-6xl">
-          <nav className="mb-6 flex gap-1 overflow-x-auto rounded-2xl border border-forest/10 bg-white p-1.5 shadow-sm">
-            {tabs.map(([key, label]) => <button key={key} onClick={() => setTab(key)} className={`whitespace-nowrap rounded-xl px-4 py-2.5 text-sm font-semibold transition ${tab === key ? "bg-forest text-white" : "text-slate-500 hover:bg-mint/40 hover:text-forest"}`}>{label}</button>)}
+      <main className="flex-1 w-full px-5 py-8 sm:px-8 lg:ml-[19rem] lg:px-10 lg:py-10">
+        <div className="mx-auto w-full max-w-[1140px]">
+          <header className="mb-8 w-full">
+            <p className="mb-2 text-xs font-bold uppercase tracking-[.22em] text-moss">Live operations intelligence</p>
+            <h1 className="text-3xl font-black tracking-[-.04em] text-forest sm:text-4xl lg:text-5xl">Ask the business. Inspect the evidence.</h1>
+            <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-600 sm:text-base">Founder-level answers over live monday.com boards, with every SQL query and data-quality limitation visible.</p>
+          </header>
+
+          <nav className="mb-6 flex gap-1 overflow-x-auto rounded-2xl border border-forest/10 bg-white p-1.5 shadow-sm w-full">
+            {tabs.map(([key, label]) => <button key={key} onClick={() => setTab(key)} className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-semibold transition ${tab === key ? "bg-forest text-white shadow-sm" : "text-slate-500 hover:bg-mint/40 hover:text-forest"}`}>{label}</button>)}
           </nav>
           {(error || healthError) && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || healthError}</div>}
 
-          {tab === "ask" && <section>
-            {!messages.length && <div className="mb-6 rounded-2xl border border-forest/10 bg-white p-5 shadow-panel sm:p-7">
-              <p className="mb-4 text-sm font-bold text-forest">Start with a benchmark question</p>
-              <div className="grid gap-2 md:grid-cols-2">{QUESTIONS.map((item) => <button key={item} onClick={() => void sendQuestion(item)} className="rounded-xl border border-forest/10 bg-paper px-4 py-3 text-left text-sm leading-snug transition hover:-translate-y-0.5 hover:border-moss hover:bg-mint/40">{item}</button>)}</div>
+          {tab === "ask" && <section className="w-full">
+            {!messages.length && <div className="mb-6 w-full rounded-2xl border border-forest/10 bg-white p-6 shadow-panel sm:p-8">
+              <div className="mb-4 flex items-center justify-between">
+                <p className="text-sm font-bold text-forest">Start with a benchmark question</p>
+                <span className="text-xs text-slate-400">Click to run against live data</span>
+              </div>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 w-full">
+                {QUESTIONS.map((item) => <button key={item} onClick={() => void sendQuestion(item)} className="rounded-xl border border-forest/10 bg-paper p-4 text-left text-sm font-medium leading-snug text-forest transition hover:-translate-y-0.5 hover:border-moss hover:bg-mint/40 hover:shadow-sm">{item}</button>)}
+              </div>
             </div>}
-            <div className="space-y-4">{messages.map((message, index) => <article key={index} className={`rounded-2xl p-5 sm:p-6 ${message.role === "user" ? "ml-auto max-w-3xl bg-forest text-white" : "max-w-4xl border border-forest/10 bg-white shadow-panel"}`}>
-              {message.role === "assistant" ? <div className="prose-skylark text-sm"><ReactMarkdown>{message.content}</ReactMarkdown></div> : <p>{message.content}</p>}
-              {message.result && <div className="mt-4 border-t border-forest/10 pt-4">
-                <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-slate-500"><StatusPill value={message.result.cache} /><span>{(message.result.latency_ms / 1000).toFixed(1)}s</span>{message.result.model && <span>{message.result.model}</span>}{message.result.action === "unsupported" && <span className="font-bold uppercase tracking-wider text-amber">unsupported</span>}</div>
-                {!!message.result.assumptions?.length && <p className="mb-3 text-xs text-slate-500"><strong>Assumptions:</strong> {message.result.assumptions.join("; ")}</p>}
-                {message.result.sql && <details className="mb-2 rounded-xl border border-forest/10 bg-paper p-3"><summary className="cursor-pointer text-xs font-bold text-forest">SQL executed</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap text-xs leading-relaxed text-slate-700">{message.result.sql}</pre>{!!message.result.attempts?.length && <p className="mt-2 text-xs text-amber">Self-corrected {message.result.attempts.length} earlier attempt(s).</p>}</details>}
-                {message.result.rows?.length > 0 && <details className="rounded-xl border border-forest/10 p-3"><summary className="cursor-pointer text-xs font-bold text-forest">Result data ({message.result.rowcount} rows)</summary><div className="mt-3"><DataTable rows={message.result.rows} /></div></details>}
+            <div className="space-y-5 w-full">{messages.map((message, index) => <article key={index} className={`w-full rounded-2xl p-5 sm:p-7 shadow-panel transition ${message.role === "user" ? "ml-auto max-w-3xl border border-forest/20 bg-forest text-white" : "border border-forest/10 bg-white"}`}>
+              {message.role === "assistant" ? <div className="prose-skylark text-sm w-full max-w-none"><ReactMarkdown>{message.content}</ReactMarkdown></div> : <div className="flex items-start gap-2.5"><span className="rounded-md bg-white/20 px-2 py-0.5 text-xs font-bold text-mint">You</span><p className="text-sm sm:text-base font-medium">{message.content}</p></div>}
+              {message.result && <div className="mt-5 border-t border-forest/10 pt-5 space-y-4 w-full">
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500"><StatusPill value={message.result.cache} /><span>{(message.result.latency_ms / 1000).toFixed(1)}s</span>{message.result.model && <span className="font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded">{message.result.model}</span>}{message.result.action === "unsupported" && <span className="rounded bg-amber/15 px-2 py-0.5 font-bold uppercase tracking-wider text-amber">unsupported</span>}</div>
+                {!!message.result.assumptions?.length && <div className="rounded-xl border border-forest/10 bg-paper/80 p-3 text-xs text-slate-600"><strong className="text-forest">Assumptions:</strong> {message.result.assumptions.join("; ")}</div>}
+                {message.result.sql && <details className="w-full rounded-xl border border-forest/10 bg-paper p-4"><summary className="cursor-pointer text-xs font-bold text-forest hover:text-moss">SQL executed</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-slate-800 bg-white/80 p-3 rounded-lg border border-forest/5">{message.result.sql}</pre>{!!message.result.attempts?.length && <p className="mt-2 text-xs font-semibold text-amber">Self-corrected {message.result.attempts.length} earlier attempt(s).</p>}</details>}
+                {message.result.rows?.length > 0 && <details className="w-full rounded-xl border border-forest/10 p-4 bg-paper/20" open={true}><summary className="cursor-pointer text-xs font-bold text-forest hover:text-moss">Result data ({message.result.rowcount} rows)</summary><div className="mt-3 w-full"><DataTable rows={message.result.rows} /></div></details>}
               </div>}
             </article>)}</div>
-            {asking && <div className="my-4 flex items-center gap-2 text-sm text-slate-500"><span className="h-2 w-2 animate-pulse rounded-full bg-moss" /> Planning, querying and checking the result…</div>}
-            <form onSubmit={(event: FormEvent) => { event.preventDefault(); void sendQuestion(question); }} className="sticky bottom-4 mt-6 flex gap-2 rounded-2xl border border-forest/10 bg-white/95 p-2 shadow-panel backdrop-blur">
+            {asking && <div className="my-5 flex items-center gap-2 text-sm text-slate-500"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-moss" /> Planning, querying and checking the result…</div>}
+            <form onSubmit={(event: FormEvent) => { event.preventDefault(); void sendQuestion(question); }} className="sticky bottom-4 mt-8 flex gap-2 rounded-2xl border border-forest/10 bg-white/95 p-2.5 shadow-panel backdrop-blur w-full">
               <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about pipeline, revenue, sectors, collections…" className="min-w-0 flex-1 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:bg-paper" />
-              <button disabled={asking || !question.trim()} className="rounded-xl bg-forest px-5 py-3 text-sm font-bold text-white hover:bg-ink disabled:opacity-40">Ask</button>
+              <button disabled={asking || !question.trim()} className="rounded-xl bg-forest px-6 py-3 text-sm font-bold text-white transition hover:bg-ink disabled:opacity-40 shadow-sm">Ask</button>
             </form>
           </section>}
 
-          {tab === "leadership" && <section className="rounded-2xl border border-forest/10 bg-white p-5 shadow-panel sm:p-7">
-            <h2 className="text-xl font-black text-forest">Leadership update</h2><p className="mt-1 text-sm text-slate-500">Numbers are computed deterministically; Gemini writes only the narrative.</p>
-            <div className="mt-5 flex flex-col gap-2 sm:flex-row"><input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional emphasis, e.g. cash exposure" className="flex-1 rounded-xl border border-forest/15 bg-paper px-4 py-3 text-sm outline-none focus:border-moss" /><button onClick={() => void generateLeadership()} disabled={leadershipLoading} className="rounded-xl bg-forest px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{leadershipLoading ? "Generating…" : "Generate update"}</button></div>
-            {leadership && <div className="mt-7 border-t border-forest/10 pt-6">
-              <div className="prose-skylark"><ReactMarkdown>{leadership.narrative}</ReactMarkdown></div>
-              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-forest/10 pt-4 text-xs text-slate-500">
+          {tab === "leadership" && <section className="w-full rounded-2xl border border-forest/10 bg-white p-6 shadow-panel sm:p-8">
+            <div className="mb-4"><h2 className="text-xl font-black text-forest">Leadership update</h2><p className="mt-1 text-sm text-slate-500">Numbers are computed deterministically; Gemini writes only the narrative.</p></div>
+            <div className="mt-5 flex flex-col gap-3 sm:flex-row w-full"><input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional emphasis (e.g. 'board is worried about collections')" className="flex-1 rounded-xl border border-forest/15 bg-paper px-4 py-3 text-sm outline-none focus:border-moss" /><button onClick={() => void generateLeadership()} disabled={leadershipLoading} className="rounded-xl bg-forest px-6 py-3 text-sm font-bold text-white transition hover:bg-ink disabled:opacity-50 shadow-sm">{leadershipLoading ? "Generating…" : "Generate update"}</button></div>
+            {leadership && <div className="mt-8 border-t border-forest/10 pt-6 w-full space-y-4">
+              <div className="prose-skylark w-full max-w-none"><ReactMarkdown>{leadership.narrative}</ReactMarkdown></div>
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-forest/10 pt-4 text-xs text-slate-500">
                 <div className="flex items-center gap-2">
                   <StatusPill value={leadership.cache} />
                   <span>{(leadership.latency_ms / 1000).toFixed(1)}s</span>
-                  {leadership.model && <span>{leadership.model}</span>}
+                  {leadership.model && <span className="font-mono text-[11px]">{leadership.model}</span>}
                 </div>
                 <button
                   onClick={() => {
@@ -226,18 +232,18 @@ export default function Home() {
                     a.click();
                     URL.revokeObjectURL(url);
                   }}
-                  className="rounded-xl border border-forest/20 bg-paper px-3 py-1.5 font-bold text-forest hover:bg-mint/50"
+                  className="rounded-xl border border-forest/20 bg-paper px-4 py-2 font-bold text-forest hover:bg-mint/50 transition shadow-sm"
                 >
                   Download as Markdown
                 </button>
               </div>
-              <details className="mt-4 rounded-xl border border-forest/10 bg-paper p-3"><summary className="cursor-pointer text-xs font-bold text-forest">Raw computed metrics</summary><pre className="mt-3 max-h-[32rem] overflow-auto text-xs">{JSON.stringify(leadership.metrics, null, 2)}</pre></details>
+              <details className="rounded-xl border border-forest/10 bg-paper p-4 w-full"><summary className="cursor-pointer text-xs font-bold text-forest hover:text-moss">Raw computed metrics</summary><pre className="mt-3 max-h-[32rem] overflow-auto rounded-lg bg-white p-3 font-mono text-xs text-slate-700 border border-forest/5">{JSON.stringify(leadership.metrics, null, 2)}</pre></details>
             </div>}
           </section>}
 
-          {tab === "data" && <section className="rounded-2xl border border-forest/10 bg-white p-5 shadow-panel sm:p-7">
-            <div className="mb-5 flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-black text-forest">Normalized data</h2><p className="mt-1 text-sm text-slate-500">The exact clean tables queried by the agent.</p></div><div className="flex rounded-xl bg-paper p-1">{(["deals", "work_orders"] as const).map((name) => <button key={name} onClick={() => setDataTable(name)} className={`rounded-lg px-3 py-2 text-xs font-bold capitalize ${dataTable === name ? "bg-white text-forest shadow-sm" : "text-slate-500"}`}>{name.replace("_", " ")}</button>)}</div></div>
-            {dataLoading ? <p className="py-10 text-center text-sm text-slate-500">Loading normalized rows…</p> : data && <><div className="mb-3 flex items-center gap-2 text-xs text-slate-500"><strong>{data.rowcount} rows</strong><StatusPill value={data.cache} /></div><DataTable rows={data.rows} columns={data.columns} /></>}
+          {tab === "data" && <section className="w-full rounded-2xl border border-forest/10 bg-white p-6 shadow-panel sm:p-8">
+            <div className="mb-6 flex flex-wrap items-end justify-between gap-4"><div><h2 className="text-xl font-black text-forest">Normalized data</h2><p className="mt-1 text-sm text-slate-500">The exact clean tables queried by the agent.</p></div><div className="flex rounded-xl bg-paper p-1 border border-forest/10">{(["deals", "work_orders"] as const).map((name) => <button key={name} onClick={() => setDataTable(name)} className={`rounded-lg px-4 py-2 text-xs font-bold capitalize transition ${dataTable === name ? "bg-white text-forest shadow-sm" : "text-slate-500 hover:text-forest"}`}>{name.replace("_", " ")}</button>)}</div></div>
+            {dataLoading ? <p className="py-12 text-center text-sm text-slate-500">Loading normalized rows…</p> : data && <div className="space-y-3 w-full"><div className="flex items-center gap-2 text-xs text-slate-500"><strong className="text-forest">{data.rowcount} rows</strong><span>&bull;</span><span>{data.columns.length} columns</span><StatusPill value={data.cache} /></div><DataTable rows={data.rows} columns={data.columns} /></div>}
           </section>}
         </div>
       </main>

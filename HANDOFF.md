@@ -81,7 +81,7 @@ Set these in **Vercel Project Settings -> Environment Variables**:
 
 | Variable | Description | Example / Value |
 |---|---|---|
-| MONDAY_API_TOKEN | monday.com API token (read-only) | Bearer ... / API token |
+| MONDAY_API_TOKEN | monday.com API token (read-only) | RAW token, 229 chars, NO "Bearer" prefix — a Bearer prefix returns HTTP 401 |
 | GEMINI_API_KEY | Google Gemini API key | AIza... |
 | DEALS_BOARD_ID | Deals board ID | 5030962955 |
 | WORK_ORDERS_BOARD_ID | Work Orders board ID | 5030963215 |
