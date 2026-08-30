@@ -267,7 +267,8 @@ _LOCAL_QCACHE: dict[str, tuple[dict[str, Any], float]] = {}
 
 def normalize_question(q: str) -> str:
     import re
-    return re.sub(r"[^a-z0-9\s]", "", q.lower()).strip()
+    cleaned = re.sub(r"[^\w\s]", " ", q.lower())
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def get_cached_question(norm_q: str) -> dict[str, Any] | None:

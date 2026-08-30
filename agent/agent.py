@@ -50,6 +50,7 @@ RULES
    question at a time.
 10. Return at most 200 rows. Aggregate rather than dumping raw rows unless the user
     explicitly asks for a list.
+11. When a question asks for a singular superlative (e.g. "the largest", "top", "highest", "lowest", "best", or "which deal owner has the largest X"), ORDER BY the metric DESC and use LIMIT 1 to return exactly one row, unless the user explicitly asked for a ranking, breakdown, or list.
 
 OUTPUT SHAPES
 {"action":"sql","intent":"<one line: what you are computing>","sql":"<query>",

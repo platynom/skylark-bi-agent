@@ -255,13 +255,26 @@ def narrate(request: NarrateRequest):
                 f"Raw result is shown below."
             )
 
-        # Update cache with generated answer
+        # Update question cache with full response including narrative prose
         if not request.history and request.sql:
             norm_q = normalize_question(request.question)
-            cached_resp = get_cached_question(norm_q)
-            if cached_resp:
-                cached_resp["answer"] = answer
-                set_cached_question(norm_q, cached_resp)
+            full_cached_resp = {
+                "action": "sql",
+                "intent": request.intent,
+                "sql": request.sql,
+                "answer": answer,
+                "assumptions": request.assumptions,
+                "rows": request.rows,
+                "rowcount": len(request.rows),
+                "columns": list(request.rows[0].keys()) if request.rows else [],
+                "caveats": request.caveats,
+                "attempts": [],
+                "clarify": None,
+                "options": [],
+                "error": None,
+                "model": llm._working_model,
+            }
+            set_cached_question(norm_q, full_cached_resp)
 
         return {
             "answer": answer,
