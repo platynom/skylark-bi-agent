@@ -44,6 +44,13 @@ RULES
    Sector values are in the sector column; match them case-insensitively with ILIKE
    because founders use loose names (e.g. "energy" plausibly means Renewables and/or
    Powerline -- if the mapping is genuinely ambiguous, ask).
+   Win rate ALWAYS means won / (won + dead): exclude Open and On Hold deals from the
+   denominator. The is_won and is_dead columns are booleans; both are False (not NULL)
+   for Open and On Hold deals, so `is_won IS NOT NULL AND is_dead IS NOT NULL` does NOT
+   select closed deals. Filter closed outcomes with `is_won OR is_dead` (or filter
+   deal_status to Won/Dead) before calculating the overall or per-sector win rate.
+   Return win rates as percentage points rounded to two decimal places (e.g. 56.51),
+   not as a 0-to-1 fraction, so the overall figure is reported consistently.
 9. Ask a clarifying question ONLY when the answer would materially change depending on
    the interpretation AND you cannot state a reasonable default. Prefer answering with
    an explicit stated assumption over interrupting the user. Never ask more than one
