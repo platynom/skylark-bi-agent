@@ -42,7 +42,19 @@ def _supabase_settings() -> tuple[str | None, str | None]:
 def _headers(key: str) -> dict[str, str]:
     # Works with legacy service_role JWTs and current sb_secret keys. The key is
     # never imported by or returned to the Next.js client.
-    return {"apikey": key, "Content-Type": "application/json", "Accept": "application/json"}
+    #
+    # BOTH headers are required. `apikey` gets the request past Supabase's gateway,
+    # but PostgREST derives the Postgres ROLE from the JWT in `Authorization`.
+    # Sending `apikey` alone runs the query as `anon`, which RLS on warehouse_cache
+    # blocks -- reads come back empty (indistinguishable from a cache miss) and
+    # writes fail. With `Authorization: Bearer <service_role>`, PostgREST assumes the
+    # service_role and bypasses RLS as intended.
+    return {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
 
 
 def _table_url(url: str) -> str:
