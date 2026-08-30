@@ -175,7 +175,7 @@ class MondayClient:
     # ------------------------------------------------------------------ #
     # data
     # ------------------------------------------------------------------ #
-    def fetch_board(self, board_id: str, page_size: int = 100) -> Board:
+    def fetch_board(self, board_id: str, page_size: int = 500) -> Board:
         """Fetch a board's schema and every item, following the cursor to the end."""
         data = self._post(
             """
