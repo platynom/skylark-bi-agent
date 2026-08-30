@@ -21,12 +21,13 @@ from agent.warehouse import build_warehouse, quality_summary
 st.set_page_config(page_title="Skylark BI Agent", page_icon="::", layout="wide")
 
 SAMPLE_QUESTIONS = [
-    "How's our pipeline looking for the renewables sector this quarter?",
+    "How's our pipeline looking for the renewables sector?",
     "What's our total outstanding receivable, and which sector is it concentrated in?",
     "Which work orders are completed but haven't been invoiced yet?",
     "What's our win rate, and does it differ by sector?",
     "Which deal owner has the largest open pipeline?",
     "How much revenue have we contracted in mining vs renewables?",
+    "Which quarter does our open pipeline actually close in?",
 ]
 
 
