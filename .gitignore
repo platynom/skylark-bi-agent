@@ -5,3 +5,8 @@ venv/
 .streamlit/secrets.toml
 .env
 .DS_Store
+.next/
+.vercel/
+node_modules/
+.env*.local
+npm-debug.log*
