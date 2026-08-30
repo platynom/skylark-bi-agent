@@ -139,8 +139,8 @@ def _history_block(history: list[dict[str, str]] | None, limit: int = 6) -> str:
     return "\n".join(lines)
 
 
-def answer_question(wh: Warehouse, question: str, llm: Gemini | None = None,
-                    history: list[dict[str, str]] | None = None) -> AgentTurn:
+def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
+                     history: list[dict[str, str]] | None = None) -> AgentTurn:
     llm = llm or Gemini()
     turn = AgentTurn(question=question)
     schema = schema_document(wh)
@@ -210,6 +210,14 @@ def answer_question(wh: Warehouse, question: str, llm: Gemini | None = None,
         return turn
 
     turn.result = df
+    return turn
+
+
+def narrate_turn(wh: Warehouse, turn: AgentTurn, llm: Gemini | None = None) -> str:
+    if turn.action != "sql" or turn.result is None:
+        return turn.answer or ""
+    llm = llm or Gemini()
+    df = turn.result
     caveats = _relevant_caveats(wh, turn.sql)
 
     preview = df.head(config.MAX_ROWS_TO_LLM)
@@ -217,7 +225,7 @@ def answer_question(wh: Warehouse, question: str, llm: Gemini | None = None,
     table_md = preview.to_markdown(index=False) if not preview.empty else "(no rows returned)"
 
     narrate_input = (
-        f"QUESTION: {question}\n\n"
+        f"QUESTION: {turn.question}\n\n"
         f"WHAT WAS COMPUTED: {turn.intent}\n\n"
         f"SQL:\n{turn.sql}\n\n"
         f"RESULT ({len(df)} row(s)"
@@ -227,10 +235,18 @@ def answer_question(wh: Warehouse, question: str, llm: Gemini | None = None,
     )
 
     try:
-        turn.answer = llm.generate(NARRATOR_SYSTEM, narrate_input, temperature=0.3, max_tokens=1200)
+        return llm.generate(NARRATOR_SYSTEM, narrate_input, temperature=0.3, max_tokens=1200)
     except LLMError as exc:
-        turn.answer = (
+        return (
             f"Query ran successfully but the narration step failed ({exc}). "
             f"Raw result is shown below."
         )
+
+
+def answer_question(wh: Warehouse, question: str, llm: Gemini | None = None,
+                    history: list[dict[str, str]] | None = None) -> AgentTurn:
+    llm = llm or Gemini()
+    turn = plan_and_execute(wh, question, llm=llm, history=history)
+    if turn.action == "sql" and turn.result is not None and not turn.answer:
+        turn.answer = narrate_turn(wh, turn, llm=llm)
     return turn

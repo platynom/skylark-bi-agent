@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -257,3 +258,104 @@ def get_warehouse(*, force_refresh: bool = False) -> WarehouseLoad:
             warning = "Live data loaded, but the Supabase cache write failed."
             LOGGER.warning("%s (%s)", warning, type(exc).__name__)
     return WarehouseLoad(wh, status, fetched_at, warning)
+
+
+QUESTION_CACHE_KEY = "skylark:qcache:v1"
+QUESTION_CACHE_TTL_SECONDS = 900
+_LOCAL_QCACHE: dict[str, tuple[dict[str, Any], float]] = {}
+
+
+def normalize_question(q: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9\s]", "", q.lower()).strip()
+
+
+def get_cached_question(norm_q: str) -> dict[str, Any] | None:
+    now = time.time()
+    if norm_q in _LOCAL_QCACHE:
+        val, ts = _LOCAL_QCACHE[norm_q]
+        if now - ts <= QUESTION_CACHE_TTL_SECONDS:
+            return dict(val)
+        _LOCAL_QCACHE.pop(norm_q, None)
+
+    url, key = _supabase_settings()
+    if not url or not key:
+        return None
+
+    try:
+        response = requests.get(
+            _table_url(url),
+            headers=_headers(key),
+            params={"key": f"eq.{QUESTION_CACHE_KEY}", "select": "payload,fetched_at", "limit": "1"},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        if response.status_code == 200:
+            rows = response.json()
+            if rows:
+                payload = rows[0].get("payload") or {}
+                entry = payload.get(norm_q)
+                if entry and isinstance(entry, dict):
+                    cached_at_str = entry.get("cached_at")
+                    if cached_at_str:
+                        cached_at = datetime.fromisoformat(cached_at_str.replace("Z", "+00:00"))
+                        if (datetime.now(timezone.utc) - cached_at).total_seconds() <= QUESTION_CACHE_TTL_SECONDS:
+                            data = entry.get("data")
+                            if data:
+                                _LOCAL_QCACHE[norm_q] = (data, now)
+                                return dict(data)
+    except Exception as exc:
+        LOGGER.debug("Question cache read error: %s", exc)
+    return None
+
+
+def set_cached_question(norm_q: str, response_data: dict[str, Any]) -> None:
+    import time
+    now = time.time()
+    _LOCAL_QCACHE[norm_q] = (dict(response_data), now)
+
+    url, key = _supabase_settings()
+    if not url or not key:
+        return
+
+    try:
+        current_payload: dict[str, Any] = {}
+        read_resp = requests.get(
+            _table_url(url),
+            headers=_headers(key),
+            params={"key": f"eq.{QUESTION_CACHE_KEY}", "select": "payload", "limit": "1"},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        if read_resp.status_code == 200:
+            rows = read_resp.json()
+            if rows and isinstance(rows[0].get("payload"), dict):
+                current_payload = rows[0]["payload"]
+
+        cutoff = datetime.now(timezone.utc).timestamp() - QUESTION_CACHE_TTL_SECONDS
+        cleaned_payload = {}
+        for k, v in current_payload.items():
+            if isinstance(v, dict) and "cached_at" in v:
+                try:
+                    ts = datetime.fromisoformat(v["cached_at"].replace("Z", "+00:00")).timestamp()
+                    if ts >= cutoff:
+                        cleaned_payload[k] = v
+                except Exception:
+                    pass
+
+        cleaned_payload[norm_q] = {
+            "data": response_data,
+            "cached_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        requests.post(
+            _table_url(url),
+            headers={**_headers(key), "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "key"},
+            json={
+                "key": QUESTION_CACHE_KEY,
+                "payload": cleaned_payload,
+                "fetched_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+    except Exception as exc:
+        LOGGER.debug("Question cache write error: %s", exc)
