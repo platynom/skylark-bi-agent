@@ -18,6 +18,7 @@ type Row = Record<string, unknown>;
 type TableQuality = {
   board: string; board_id: string; rows: number; dropped_header_rows: number;
   unusable_columns: string[]; low_coverage: Record<string, number>;
+  coercion_failures?: Record<string, number>; notes?: string[];
 };
 type Health = {
   ok: boolean; boards: Record<string, string>; row_counts: Record<string, number>;
@@ -97,6 +98,14 @@ function Sidebar({ health, loading, refresh }: { health: Health | null; loading:
           <p className="mt-1 break-words text-white/60">{table.unusable_columns.join(", ") || "None"}</p>
           <p className="mt-3 font-semibold text-moss">Partial coverage</p>
           <div className="mt-1 space-y-1 text-white/60">{Object.entries(table.low_coverage).sort((a, b) => a[1] - b[1]).slice(0, 12).map(([key, value]) => <div key={key} className="flex justify-between gap-2"><span className="truncate">{key}</span><span>{Math.round(value * 100)}%</span></div>)}</div>
+          {table.coercion_failures && Object.keys(table.coercion_failures).length > 0 && <>
+            <p className="mt-3 font-semibold text-moss">Failed type coercion</p>
+            <div className="mt-1 space-y-1 text-white/60">{Object.entries(table.coercion_failures).map(([key, count]) => <div key={key} className="flex justify-between gap-2"><span className="truncate">{key}</span><span>{count}</span></div>)}</div>
+          </>}
+          {table.notes && table.notes.length > 0 && <>
+            <p className="mt-3 font-semibold text-moss">Data notes</p>
+            <div className="mt-1 space-y-1.5 text-white/60">{table.notes.map((note, idx) => <p key={idx} className="leading-snug">{note}</p>)}</div>
+          </>}
         </details>)}
       </section>}
       <p className="mt-8 border-t border-white/10 pt-4 text-[11px] leading-relaxed text-white/40">Read-only. Every answer is generated from normalized monday.com data and exposes its SQL.</p>
@@ -199,7 +208,31 @@ export default function Home() {
           {tab === "leadership" && <section className="rounded-2xl border border-forest/10 bg-white p-5 shadow-panel sm:p-7">
             <h2 className="text-xl font-black text-forest">Leadership update</h2><p className="mt-1 text-sm text-slate-500">Numbers are computed deterministically; Gemini writes only the narrative.</p>
             <div className="mt-5 flex flex-col gap-2 sm:flex-row"><input value={focus} onChange={(e) => setFocus(e.target.value)} placeholder="Optional emphasis, e.g. cash exposure" className="flex-1 rounded-xl border border-forest/15 bg-paper px-4 py-3 text-sm outline-none focus:border-moss" /><button onClick={() => void generateLeadership()} disabled={leadershipLoading} className="rounded-xl bg-forest px-5 py-3 text-sm font-bold text-white disabled:opacity-50">{leadershipLoading ? "Generating…" : "Generate update"}</button></div>
-            {leadership && <div className="mt-7 border-t border-forest/10 pt-6"><div className="prose-skylark"><ReactMarkdown>{leadership.narrative}</ReactMarkdown></div><div className="mt-5 flex items-center gap-2 text-xs text-slate-500"><StatusPill value={leadership.cache} /><span>{(leadership.latency_ms / 1000).toFixed(1)}s</span>{leadership.model && <span>{leadership.model}</span>}</div><details className="mt-4 rounded-xl border border-forest/10 bg-paper p-3"><summary className="cursor-pointer text-xs font-bold text-forest">Raw computed metrics</summary><pre className="mt-3 max-h-[32rem] overflow-auto text-xs">{JSON.stringify(leadership.metrics, null, 2)}</pre></details></div>}
+            {leadership && <div className="mt-7 border-t border-forest/10 pt-6">
+              <div className="prose-skylark"><ReactMarkdown>{leadership.narrative}</ReactMarkdown></div>
+              <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-forest/10 pt-4 text-xs text-slate-500">
+                <div className="flex items-center gap-2">
+                  <StatusPill value={leadership.cache} />
+                  <span>{(leadership.latency_ms / 1000).toFixed(1)}s</span>
+                  {leadership.model && <span>{leadership.model}</span>}
+                </div>
+                <button
+                  onClick={() => {
+                    const blob = new Blob([leadership.narrative], { type: "text/markdown" });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "skylark_leadership_update.md";
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="rounded-xl border border-forest/20 bg-paper px-3 py-1.5 font-bold text-forest hover:bg-mint/50"
+                >
+                  Download as Markdown
+                </button>
+              </div>
+              <details className="mt-4 rounded-xl border border-forest/10 bg-paper p-3"><summary className="cursor-pointer text-xs font-bold text-forest">Raw computed metrics</summary><pre className="mt-3 max-h-[32rem] overflow-auto text-xs">{JSON.stringify(leadership.metrics, null, 2)}</pre></details>
+            </div>}
           </section>}
 
           {tab === "data" && <section className="rounded-2xl border border-forest/10 bg-white p-5 shadow-panel sm:p-7">
