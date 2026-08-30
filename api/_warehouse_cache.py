@@ -21,7 +21,7 @@ from agent.warehouse import Warehouse, build_warehouse, quality_summary
 
 LOGGER = logging.getLogger("skylark.warehouse_cache")
 CACHE_KEY = "skylark:warehouse:v1"
-CACHE_TTL_SECONDS = 300
+CACHE_TTL_SECONDS = 1800
 REQUEST_TIMEOUT_SECONDS = 8
 
 
