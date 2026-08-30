@@ -5,9 +5,11 @@ paused, stale, or unavailable, callers still receive a live monday.com warehouse
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -17,10 +19,10 @@ import pandas as pd
 import requests
 
 from agent.normalize import ColumnQuality, TableQuality
-from agent.warehouse import Warehouse, build_warehouse, quality_summary
+from agent.warehouse import Warehouse, build_warehouse, quality_summary, schema_document
 
 LOGGER = logging.getLogger("skylark.warehouse_cache")
-CACHE_KEY = "skylark:warehouse:v1"
+CACHE_KEY = "skylark:warehouse:v2"
 CACHE_TTL_SECONDS = 1800
 REQUEST_TIMEOUT_SECONDS = 8
 
@@ -65,21 +67,66 @@ def _parse_timestamp(value: str) -> datetime:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc)
 
 
+def _df_to_parquet_b64(df: pd.DataFrame) -> str:
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
+        path = tf.name.replace("\\", "/")
+    try:
+        con = duckdb.connect(":memory:")
+        con.register("df_view", df)
+        con.execute(f"COPY df_view TO '{path}' (FORMAT PARQUET)")
+        with open(path, "rb") as f:
+            data = f.read()
+        return base64.b64encode(data).decode("ascii")
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
+def _parquet_b64_to_df(b64_str: str, dtypes: dict[str, str] | None = None) -> pd.DataFrame:
+    raw = base64.b64decode(b64_str.encode("ascii"))
+    with tempfile.NamedTemporaryFile(suffix=".parquet", delete=False) as tf:
+        tf.write(raw)
+        path = tf.name.replace("\\", "/")
+    try:
+        con = duckdb.connect(":memory:")
+        df = con.execute(f"SELECT * FROM read_parquet('{path}')").df()
+        if dtypes:
+            for col, dtype in dtypes.items():
+                if col in df:
+                    if "datetime" in dtype:
+                        df[col] = pd.to_datetime(df[col], errors="coerce")
+                    elif dtype.startswith(("float", "int", "Int", "UInt")):
+                        df[col] = pd.to_numeric(df[col], errors="coerce")
+                        try:
+                            df[col] = df[col].astype(dtype)
+                        except (TypeError, ValueError):
+                            pass
+                    elif dtype in ("bool", "boolean"):
+                        df[col] = df[col].astype("boolean" if df[col].isna().any() else "bool")
+                    elif dtype.startswith("string"):
+                        df[col] = df[col].astype("string")
+        return df
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
+
+
 def _frame_records(df: pd.DataFrame) -> list[dict[str, Any]]:
     return json.loads(df.to_json(orient="records", date_format="iso"))
 
 
 def _serialize(wh: Warehouse) -> dict[str, Any]:
     return {
-        "version": 1,
-        "frames": {
-            "deals": _frame_records(wh.deals),
-            "work_orders": _frame_records(wh.work_orders),
+        "version": 2,
+        "parquet": {
+            "deals": _df_to_parquet_b64(wh.deals),
+            "work_orders": _df_to_parquet_b64(wh.work_orders),
         },
         "dtypes": {
             "deals": {column: str(dtype) for column, dtype in wh.deals.dtypes.items()},
             "work_orders": {column: str(dtype) for column, dtype in wh.work_orders.dtypes.items()},
         },
+        "schema_document": schema_document(wh),
         "quality_summary": quality_summary(wh),
         "quality_detail": {name: asdict(profile) for name, profile in wh.quality.items()},
         "board_ids": wh.board_ids,
@@ -118,11 +165,18 @@ def _restore_quality(raw: dict[str, Any]) -> dict[str, TableQuality]:
 
 
 def _deserialize(payload: dict[str, Any], fetched_at: datetime) -> Warehouse:
-    if payload.get("version") != 1:
+    version = payload.get("version")
+    if version == 2 and "parquet" in payload:
+        dtypes = payload["dtypes"]
+        deals = _parquet_b64_to_df(payload["parquet"]["deals"], dtypes["deals"])
+        work_orders = _parquet_b64_to_df(payload["parquet"]["work_orders"], dtypes["work_orders"])
+    elif version == 1 and "frames" in payload:
+        frames, dtypes = payload["frames"], payload["dtypes"]
+        deals = _restore_frame(frames["deals"], dtypes["deals"])
+        work_orders = _restore_frame(frames["work_orders"], dtypes["work_orders"])
+    else:
         raise ValueError("Unsupported warehouse cache version")
-    frames, dtypes = payload["frames"], payload["dtypes"]
-    deals = _restore_frame(frames["deals"], dtypes["deals"])
-    work_orders = _restore_frame(frames["work_orders"], dtypes["work_orders"])
+
     con = duckdb.connect(":memory:")
     con.register("deals_df", deals)
     con.register("work_orders_df", work_orders)
@@ -135,6 +189,7 @@ def _deserialize(payload: dict[str, Any], fetched_at: datetime) -> Warehouse:
         quality=_restore_quality(payload["quality_detail"]),
         loaded_at=fetched_at.timestamp(),
         board_ids={str(k): str(v) for k, v in payload["board_ids"].items()},
+        _schema_doc=payload.get("schema_document"),
     )
 
 
