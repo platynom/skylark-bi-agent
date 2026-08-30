@@ -5,6 +5,7 @@ import json
 import logging
 import math
 import os
+import re
 import time
 from typing import Any, Literal
 
@@ -82,10 +83,33 @@ def _clean_nan(obj: Any) -> Any:
     return obj
 
 
-def _records(frame: pd.DataFrame | None) -> list[dict[str, Any]]:
+MONDAY_ACCOUNT_URL = "https://tanmayk311s-team-company.monday.com"
+
+
+def _records(frame: pd.DataFrame | None, board_id: str | None = None) -> list[dict[str, Any]]:
     if frame is None:
         return []
-    return json.loads(frame.to_json(orient="records", date_format="iso"))
+    records = json.loads(frame.to_json(orient="records", date_format="iso"))
+    if board_id and "item_id" in frame.columns:
+        for row in records:
+            item_id = row.get("item_id")
+            if item_id not in (None, ""):
+                row["monday_item_url"] = (
+                    f"{MONDAY_ACCOUNT_URL}/boards/{board_id}/pulses/{item_id}"
+                )
+    return records
+
+
+def _result_board_id(sql: str | None, board_ids: dict[str, str]) -> str | None:
+    """Resolve provenance only for a result drawn from one source table."""
+    sql_l = (sql or "").lower()
+    uses_deals = bool(re.search(r"\bdeals\b", sql_l))
+    uses_work_orders = bool(re.search(r"\bwork_orders\b", sql_l))
+    if uses_deals and not uses_work_orders:
+        return board_ids.get("deals")
+    if uses_work_orders and not uses_deals:
+        return board_ids.get("work_orders")
+    return None
 
 
 def _meta(load: WarehouseLoad) -> dict[str, Any]:
@@ -130,6 +154,44 @@ def _deterministic_narrative(df: pd.DataFrame | None, intent: str | None, assump
     """Generate a clean, deterministic summary for single-row or simple aggregate results."""
     if df is None or df.empty:
         return None
+
+    # Two founder metrics are deliberately pinned here because a correct result
+    # set must not be corrupted by narration-time arithmetic or unit conversion.
+    owner_columns = {
+        "owner_code", "open_deal_count", "valued_deal_count",
+        "raw_open_pipeline_value",
+    }
+    if owner_columns <= set(df.columns):
+        top = df.sort_values("raw_open_pipeline_value", ascending=False).iloc[0]
+        text = (
+            f"**{top['owner_code']}** has the largest open pipeline: "
+            f"**{_format_val('raw_open_pipeline_value', top['raw_open_pipeline_value'])}** "
+            f"across **{int(top['open_deal_count'])} open deals**, of which "
+            f"**{int(top['valued_deal_count'])} carry a value**. This is the "
+            "**raw/unweighted** pipeline; probability weighting was not used."
+        )
+        if assumptions:
+            text += f"\n\n*Assumptions: {'; '.join(assumptions)}*"
+        return text
+
+    uninvoiced_columns = {
+        "item_id", "execution_status", "billed_incl_gst", "amount_incl_gst",
+    }
+    if uninvoiced_columns <= set(df.columns):
+        completed = df["execution_status"].eq("Completed").all()
+        zero_billed = df["billed_incl_gst"].fillna(0).eq(0).all()
+        if completed and zero_billed:
+            positive = df["amount_incl_gst"].fillna(0).gt(0)
+            contracted = float(df.loc[positive, "amount_incl_gst"].sum())
+            return (
+                f"**{len(df)} completed work orders have no recorded billing**, "
+                f"representing **{_format_val('amount_incl_gst', contracted)}** of "
+                f"contracted value across **{int(positive.sum())} positive-value "
+                "work orders**. This uses exactly `execution_status = 'Completed'` "
+                "and `COALESCE(billed_incl_gst, 0) = 0`; partially completed work "
+                "orders and invoice workflow labels are excluded."
+            )
+
     if len(df) == 1 and len(df.columns) <= 3:
         cols = list(df.columns)
         if len(cols) == 1:
@@ -199,15 +261,23 @@ def ask(request: AskRequest):
             if deterministic:
                 turn.answer = deterministic
 
+        result_rows = _records(
+            turn.result,
+            _result_board_id(turn.sql, load.warehouse.board_ids),
+        )
+        result_columns = [] if turn.result is None else list(turn.result.columns)
+        if result_rows and "monday_item_url" in result_rows[0]:
+            result_columns.append("monday_item_url")
+
         response_data = {
             "action": turn.action,
             "intent": turn.intent,
             "sql": turn.sql,
             "answer": turn.answer,
             "assumptions": turn.assumptions,
-            "rows": _records(turn.result),
+            "rows": result_rows,
             "rowcount": 0 if turn.result is None else len(turn.result),
-            "columns": [] if turn.result is None else list(turn.result.columns),
+            "columns": result_columns,
             "caveats": caveats,
             "attempts": turn.attempts,
             "clarify": turn.clarify,
@@ -306,7 +376,11 @@ def data(table: Literal["deals", "work_orders"] = "deals", limit: int = Query(10
     try:
         load = get_warehouse()
         frame = load.warehouse.deals if table == "deals" else load.warehouse.work_orders
-        return {"table": table, "rows": _records(frame.head(limit)), "rowcount": len(frame), "columns": list(frame.columns), **_meta(load)}
+        rows = _records(frame.head(limit), load.warehouse.board_ids[table])
+        columns = list(frame.columns)
+        if "item_id" in frame.columns:
+            columns.append("monday_item_url")
+        return {"table": table, "rows": rows, "rowcount": len(frame), "columns": columns, **_meta(load)}
     except Exception as exc:  # noqa: BLE001
         return _safe_error(exc)
 

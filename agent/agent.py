@@ -12,6 +12,7 @@ never costs a narration call.
 from __future__ import annotations
 
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -37,7 +38,8 @@ RULES
    work_orders.customer_code (WOCOMPANY*) are different masking schemes and must never be
    joined. The only bridge is deal_name, which is NOT unique. If a cross-table join is
    required, aggregate each side to one row per deal_name in a CTE before joining, and
-   record this in "assumptions".
+   record this in "assumptions". Always filter deal_name IS NOT NULL on both sides:
+   NULL means the name is missing and must never count as a matched deal name.
 7. Fiscal year is Indian convention (April-March). Pre-computed helper columns exist:
    *_fy (e.g. 'FY25-26') and *_fq (e.g. 'FY25-26 Q1'). Prefer them over date arithmetic.
 8. "Pipeline" means deals where deal_status = 'Open'. "Won"/"Dead" are closed outcomes.
@@ -51,6 +53,16 @@ RULES
    deal_status to Won/Dead) before calculating the overall or per-sector win rate.
    Return win rates as percentage points rounded to two decimal places (e.g. 56.51),
    not as a 0-to-1 fraction, so the overall figure is reported consistently.
+   Unless the founder explicitly asks for a weighted or probability-adjusted pipeline,
+   "pipeline value" means the raw/unweighted SUM(deal_value) over Open deals. For an
+   owner pipeline ranking, return owner_code, open-deal count, valued-deal count and raw
+   open pipeline value; label the intent/result as raw or unweighted so the answer states
+   which definition was used. Use weighted_value only when the question explicitly asks
+   for a weighted/probability-adjusted view.
+   "Completed but not invoiced" means execution_status = 'Completed' exactly AND
+   COALESCE(billed_incl_gst, 0) = 0. Exclude 'Partial Completed'. billed_incl_gst is the
+   financial evidence of invoicing; do not substitute invoice_status, latest_invoice_no,
+   wo_status_billed, or a fuzzy ILIKE match for this metric.
 9. Ask a clarifying question ONLY when the answer would materially change depending on
    the interpretation AND you cannot state a reasonable default. Prefer answering with
    an explicit stated assumption over interrupting the user. Never ask more than one
@@ -58,6 +70,11 @@ RULES
 10. Return at most 200 rows. Aggregate rather than dumping raw rows unless the user
     explicitly asks for a list.
 11. Apply LIMIT 1 ONLY when the question specifically asks for a single individual record or single named entity (e.g. "which deal owner has the largest X", "our single biggest deal", "which customer owes the most"). DO NOT apply LIMIT 1 when the question asks about concentration, distribution, breakdown, ranking, mix, comparison, or share across categories/sectors (e.g. "which sector is receivable concentrated in" requires a full breakdown by sector so the relative concentration and total are both visible).
+12. PROVENANCE IS NON-NEGOTIABLE: for every row-level list of individual deals or work
+    orders (especially questions beginning "which deals" or "which work orders"), the
+    SELECT MUST include item_id. A row-level SELECT without item_id is invalid because
+    the application cannot link the answer to its monday.com source record.
+    Aggregated/grouped rows do not represent one source item and therefore do not need it.
 
 OUTPUT SHAPES
 {"action":"sql","intent":"<one line: what you are computing>","sql":"<query>",
@@ -83,6 +100,8 @@ Write a direct answer, then the insight behind it. Rules:
   (filter too narrow, or the field is sparsely populated).
 - Never state a total as authoritative when the driving column has low coverage; say
   "across the N records that have a value" instead.
+- When the result distinguishes raw/unweighted pipeline from weighted pipeline, explicitly
+  state which definition was used.
 - Markdown. Short. No headers unless there are 3+ distinct sections. No emoji.
 """
 
@@ -147,6 +166,27 @@ def _history_block(history: list[dict[str, str]] | None, limit: int = 6) -> str:
     return "\n".join(lines)
 
 
+def _missing_row_provenance(sql: str, result: pd.DataFrame) -> bool:
+    """Reject individual-record queries that cannot link back to monday.com.
+
+    Aggregates, category lists, and cross-board results do not correspond to one
+    source item. A plain SELECT from exactly one source table does.
+    """
+    if "item_id" in result.columns:
+        return False
+    sql_l = sql.lower()
+    uses_deals = bool(re.search(r"\bdeals\b", sql_l))
+    uses_work_orders = bool(re.search(r"\bwork_orders\b", sql_l))
+    if uses_deals == uses_work_orders:  # neither table, or both tables
+        return False
+    # Inspect the outer/final projection, not an aggregate inside an earlier CTE.
+    select_part = sql_l.rsplit("select", 1)[-1].split("from", 1)[0]
+    aggregate = bool(re.search(r"\b(count|sum|avg|min|max|median|percentile_\w*)\s*\(", select_part))
+    category_result = "group by" in sql_l or "select distinct" in sql_l
+    set_result = " intersect " in sql_l or " union " in sql_l
+    return not (aggregate or category_result or set_result)
+
+
 def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
                      history: list[dict[str, str]] | None = None) -> AgentTurn:
     llm = llm or Gemini()
@@ -190,6 +230,11 @@ def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
             break
         try:
             df = run_sql(wh, sql)
+            if _missing_row_provenance(sql, df):
+                raise UnsafeQuery(
+                    "Row-level results must SELECT item_id so every row can link "
+                    "to its monday.com source record. Add item_id to the SELECT list."
+                )
             turn.sql = sql
             break
         except (UnsafeQuery, Exception) as exc:  # duckdb raises many exception types

@@ -67,11 +67,17 @@ function DataTable({ rows, columns }: { rows: Row[]; columns?: string[] }) {
     <div className="max-h-[32rem] w-full overflow-auto rounded-xl border border-forest/10 bg-white shadow-inner">
       <table className="min-w-full w-full whitespace-nowrap text-left text-xs">
         <thead className="sticky top-0 z-10 bg-forest text-white">
-          <tr>{keys.map((key) => <th key={key} className="px-4 py-3 font-semibold tracking-wider">{key}</th>)}</tr>
+          <tr>{keys.map((key) => <th key={key} className="px-4 py-3 font-semibold tracking-wider">{key === "monday_item_url" ? "source" : key}</th>)}</tr>
         </thead>
         <tbody className="divide-y divide-forest/5">{rows.map((row, index) => (
           <tr key={index} className="odd:bg-paper/60 hover:bg-mint/40 transition-colors">
-            {keys.map((key) => <td key={key} className="max-w-md overflow-hidden text-ellipsis px-4 py-2.5">{row[key] == null ? <span className="font-mono text-slate-300">NULL</span> : String(row[key])}</td>)}
+            {keys.map((key) => <td key={key} className="max-w-md overflow-hidden text-ellipsis px-4 py-2.5">{
+              row[key] == null
+                ? <span className="font-mono text-slate-300">NULL</span>
+                : key === "monday_item_url"
+                  ? <a href={String(row[key])} target="_blank" rel="noreferrer" className="font-semibold text-forest underline decoration-moss underline-offset-2 hover:text-moss">Open item ↗</a>
+                  : String(row[key])
+            }</td>)}
           </tr>
         ))}</tbody>
       </table>
