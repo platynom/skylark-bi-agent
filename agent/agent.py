@@ -34,9 +34,14 @@ questions into DuckDB SQL over two tables sourced live from monday.com boards.
 RULES
 1. Output JSON only, matching one of the shapes below.
 2. Write DuckDB SQL. One statement. SELECT or WITH only. Never write, never DDL.
+   When combining result sets with UNION ALL, if ordering, either ORDER BY column name / position
+   (e.g. `ORDER BY 1`) or wrap the entire union in an outer query: `SELECT * FROM (SELECT ... UNION ALL SELECT ...) ORDER BY ...`.
 3. Only reference columns that appear in the schema. Do not invent columns.
-4. A column marked UNUSABLE has no data at all. Never aggregate it. If the question
-   depends on one, return action "unsupported" and say which field is not tracked.
+4. A column marked UNUSABLE has 0% fill rate and no data at all (such as collection_status,
+   deal_type, priority, etc.). Never query, group by, or aggregate an unusable column. If a
+   question specifically asks for or depends on an unusable column (e.g. "group by collection status",
+   "by deal type", "by priority", "using the collection status field"), you MUST return action:
+   "unsupported" and state that the field is not populated / not tracked on the monday board.
 5. NULL is not zero. Use explicit filters (WHERE x IS NOT NULL) when the question is
    about populated records, and prefer COUNT(col) alongside COUNT(*) so coverage is visible.
    Never add unrequested filters on metadata columns (such as deal_name IS NOT NULL or
@@ -69,8 +74,10 @@ RULES
    When a win-rate question asks for an overall/company total alongside sectors,
    include a row labelled exactly 'Overall' for the grand total, and label unassigned/null sectors
    as 'Unassigned' or 'Unknown' (never use COALESCE(sector, 'Overall') on individual rows
-   because it creates duplicate 'Overall' rows and collides with the grand total). The Overall
-   row must use every Won/Dead deal, including records whose sector is NULL; do not
+   because it creates duplicate 'Overall' rows and collides with the grand total). To combine
+   the sector breakdown and Overall row in DuckDB, wrap the UNION ALL in an outer query:
+   `SELECT * FROM (SELECT sector, won, dead, win_rate FROM sector_stats UNION ALL SELECT 'Overall', won, dead, win_rate FROM overall_stats) ORDER BY CASE WHEN sector='Overall' THEN 0 ELSE 1 END, sector`.
+   The Overall row must use every Won/Dead deal, including records whose sector is NULL; do not
    let a sector-population filter change the company-wide 56.51% denominator.
    Unless the founder explicitly asks for a weighted or probability-adjusted pipeline,
    "pipeline value" means the raw/unweighted SUM(deal_value) over Open deals. For an
@@ -92,12 +99,19 @@ RULES
 10. Return at most 200 rows. Aggregate rather than dumping raw rows unless the user
     explicitly asks for a list.
 11. Apply LIMIT 1 ONLY when the question specifically asks for a single individual record or single named entity (e.g. "which deal owner has the largest X", "our single biggest deal", "which customer owes the most"). DO NOT apply LIMIT 1 when the question asks about concentration, distribution, breakdown, ranking, mix, comparison, or share across categories/sectors (e.g. "which sector is receivable concentrated in" requires a full breakdown by sector so the relative concentration and total are both visible).
-12. PROVENANCE IS NON-NEGOTIABLE: for EVERY list of individual deals, work orders, or
-    opportunities (including questions like "show large deals", "list big opportunities",
-    "which deals are large", "which work orders are completed"), the SELECT list MUST
-    include `item_id` so each row links directly to its monday.com pulse. A row-level SELECT
-    without `item_id` is invalid. Aggregated/grouped rows (with GROUP BY) do not represent
-    a single source item and therefore do not need it.
+12. PROVENANCE IS NON-NEGOTIABLE: for EVERY query returning individual deal, work order, or
+    opportunity records (including questions like "show large deals", "list big opportunities",
+    "which deals are large", "which work orders are completed", "our single biggest open deal",
+    "name the top open deal by raw value", "show our largest individual open deal"), the SELECT list
+    MUST include `item_id` so each row links directly to its monday.com pulse. A row-level deal or
+    work-order SELECT without `item_id` is invalid. Aggregated/grouped rows (with GROUP BY) do not
+    represent a single source item and therefore do not need it.
+13. CATEGORICAL VALUES & EXACT MATCHING: When filtering by categorical fields (deal_stage,
+    deal_status, sector, execution_status, owner_code, customer_code), copy string literals
+    VERBATIM from the schema document (including exact spacing, punctuation, and casing, e.g.
+    `deal_stage = 'E. Proposal/Commercials Sent'`). As a safety rule, prefer `ILIKE '%keyword%'`
+    (such as `deal_stage ILIKE '%Proposal%'` or `sector ILIKE '%Renewables%'`) over exact `=`
+    when matching stages, sectors, or descriptions unless copying the exact value verbatim.
 
 OUTPUT SHAPES
 {"action":"sql","intent":"<one line: what you are computing>","sql":"<query>",
@@ -224,6 +238,10 @@ class AgentTurn:
     options: list[str] = field(default_factory=list)
     error: str | None = None
     attempts: list[dict[str, str]] = field(default_factory=list)
+    provider: str = "none"
+    model: str | None = None
+    provider_chain_attempted: list[str] = field(default_factory=list)
+    latency_ms: float = 0.0
 
 
 def _relevant_caveats(wh: Warehouse, sql: str | None) -> list[str]:
@@ -385,8 +403,13 @@ def deterministic_narration_fallback(
     return summary
 
 
-def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
-                     history: list[dict[str, str]] | None = None) -> AgentTurn:
+def plan_and_execute(
+    wh: Warehouse,
+    question: str,
+    llm: Gemini | None = None,
+    history: list[dict[str, str]] | None = None,
+    force_provider: str | None = None,
+) -> AgentTurn:
     llm = llm or Gemini()
     turn = AgentTurn(question=question)
     schema = schema_document(wh)
@@ -400,8 +423,16 @@ def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
     )
 
     try:
-        plan = llm.generate_json(PLANNER_SYSTEM, context, temperature=0.0)
+        plan = llm.generate_json(PLANNER_SYSTEM, context, temperature=0.0, force_provider=force_provider)
+        turn.provider = getattr(llm, "last_provider", "vertex")
+        turn.model = getattr(llm, "last_model", None)
+        turn.provider_chain_attempted = getattr(llm, "last_chain", [])
+        turn.latency_ms = getattr(llm, "last_latency_ms", 0.0)
     except LLMError as exc:
+        turn.provider = getattr(llm, "last_provider", "deterministic")
+        turn.model = getattr(llm, "last_model", None)
+        turn.provider_chain_attempted = getattr(llm, "last_chain", [])
+        turn.latency_ms = getattr(llm, "last_latency_ms", 0.0)
         turn.action, turn.error = "error", str(exc)
         return turn
 
@@ -446,7 +477,7 @@ def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
                 f"present in the schema above."
             )
             try:
-                plan = llm.generate_json(PLANNER_SYSTEM, repair, temperature=0.0)
+                plan = llm.generate_json(PLANNER_SYSTEM, repair, temperature=0.0, force_provider=force_provider)
             except LLMError as exc2:
                 last_error = str(exc2)
                 break
@@ -464,7 +495,12 @@ def plan_and_execute(wh: Warehouse, question: str, llm: Gemini | None = None,
     return turn
 
 
-def narrate_turn(wh: Warehouse, turn: AgentTurn, llm: Gemini | None = None) -> str:
+def narrate_turn(
+    wh: Warehouse,
+    turn: AgentTurn,
+    llm: Gemini | None = None,
+    force_provider: str | None = None,
+) -> str:
     if turn.action != "sql" or turn.result is None:
         return turn.answer or ""
     llm = llm or Gemini()
@@ -490,7 +526,13 @@ def narrate_turn(wh: Warehouse, turn: AgentTurn, llm: Gemini | None = None) -> s
     )
 
     try:
-        answer = llm.generate(NARRATOR_SYSTEM, narrate_input, temperature=0.3, max_tokens=1200)
+        answer = llm.generate(
+            NARRATOR_SYSTEM,
+            narrate_input,
+            temperature=0.3,
+            max_tokens=1200,
+            force_provider=force_provider,
+        )
         if narrated_currency_is_valid(answer, allowed_currency):
             return answer
         LOGGER.warning("Narrator emitted an INR value outside the server-provided allow-list")
@@ -500,10 +542,16 @@ def narrate_turn(wh: Warehouse, turn: AgentTurn, llm: Gemini | None = None) -> s
         return deterministic_narration_fallback(df, turn.intent, turn.assumptions)
 
 
-def answer_question(wh: Warehouse, question: str, llm: Gemini | None = None,
-                    history: list[dict[str, str]] | None = None) -> AgentTurn:
+def answer_question(
+    wh: Warehouse,
+    question: str,
+    llm: Gemini | None = None,
+    history: list[dict[str, str]] | None = None,
+    force_provider: str | None = None,
+) -> AgentTurn:
     llm = llm or Gemini()
-    turn = plan_and_execute(wh, question, llm=llm, history=history)
+    turn = plan_and_execute(wh, question, llm=llm, history=history, force_provider=force_provider)
     if turn.action == "sql" and turn.result is not None and not turn.answer:
-        turn.answer = narrate_turn(wh, turn, llm=llm)
+        turn.answer = narrate_turn(wh, turn, llm=llm, force_provider=force_provider)
     return turn
+

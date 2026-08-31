@@ -15,23 +15,39 @@ const QUESTIONS = [
 
 type Tab = "ask" | "leadership" | "data";
 type Row = Record<string, unknown>;
+type ProviderOption = "auto" | "vertex" | "ai_studio" | "deterministic";
+
 type TableQuality = {
   board: string; board_id: string; rows: number; dropped_header_rows: number;
   unusable_columns: string[]; low_coverage: Record<string, number>;
   coercion_failures?: Record<string, number>; notes?: string[];
 };
+
+type ProviderStatusItem = {
+  status: "healthy" | "throttled" | "standby";
+  consecutive_failures: number;
+  throttled_remaining_sec: number;
+  last_error?: string | null;
+  total_calls: number;
+  total_failures: number;
+};
+
 type Health = {
   ok: boolean; boards: Record<string, string>; row_counts: Record<string, number>;
   quality: { tables: Record<string, TableQuality> }; cache: string;
   data_age_seconds: number; warning?: string | null;
+  providers?: Record<string, ProviderStatusItem>;
 };
+
 type AskResult = {
   action: string; intent?: string | null; sql?: string | null; answer?: string | null;
   assumptions: string[]; rows: Row[]; rowcount: number; columns?: string[];
   caveats?: string[]; attempts: { sql: string; error: string }[]; clarify?: string | null;
-  options?: string[]; error?: string | null; model?: string | null;
+  options?: string[]; error?: string | null; provider?: string; model?: string | null;
+  provider_chain_attempted?: string[]; providers_status?: Record<string, ProviderStatusItem>;
   cache: string; latency_ms: number; warning?: string | null;
 };
+
 type Message = { role: "user" | "assistant"; content: string; result?: AskResult; narrating?: boolean };
 type DataResponse = { table: string; rows: Row[]; rowcount: number; columns: string[]; cache: string };
 
@@ -57,6 +73,39 @@ function StatusPill({ value }: { value: string }) {
     >
       {isQCache ? "cached" : value}
     </span>
+  );
+}
+
+function ProviderBadge({ result }: { result: AskResult }) {
+  const provider = result.provider || "vertex";
+  const latency = (result.latency_ms / 1000).toFixed(1);
+  const chain = result.provider_chain_attempted || [];
+  const hadFailover = chain.some(c => c.includes("429") || c.includes("error") || (c.includes("vertex") && provider === "ai_studio"));
+
+  let label = "Vertex";
+  let badgeColor = "bg-blue-50 text-blue-800 border-blue-200";
+
+  if (provider === "ai_studio") {
+    label = "AI Studio";
+    badgeColor = hadFailover ? "bg-amber-50 text-amber-900 border-amber-300" : "bg-purple-50 text-purple-800 border-purple-200";
+  } else if (provider === "deterministic") {
+    label = "Deterministic";
+    badgeColor = "bg-emerald-50 text-emerald-800 border-emerald-200";
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-semibold ${badgeColor}`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-current opacity-75" />
+        <span>{label} &bull; {latency}s</span>
+        {hadFailover && <span className="font-normal text-[11px] opacity-90">(Vertex unavailable &rarr; auto failed over)</span>}
+      </span>
+      {result.model && result.provider !== "deterministic" && (
+        <span className="font-mono text-[10px] text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+          {result.model}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -87,12 +136,56 @@ function DataTable({ rows, columns }: { rows: Row[]; columns?: string[] }) {
 
 function Sidebar({ health, loading, refresh }: { health: Health | null; loading: boolean; refresh: () => void }) {
   const dropped = health ? Object.values(health.quality.tables).reduce((n, table) => n + table.dropped_header_rows, 0) : 0;
+  const providers = health?.providers;
+
   return (
     <aside className="border-b border-forest/10 bg-forest px-5 py-6 text-white lg:fixed lg:inset-y-0 lg:w-[19rem] lg:overflow-y-auto lg:border-b-0 lg:border-r">
       <div className="mb-7 flex items-center gap-3">
         <div className="grid h-10 w-10 place-items-center rounded-xl bg-mint font-black text-forest">S</div>
         <div><p className="font-bold tracking-tight">Skylark BI</p><p className="text-xs text-white/60">Founder intelligence console</p></div>
       </div>
+
+      <section className="mb-7">
+        <p className="mb-3 text-[10px] font-bold uppercase tracking-[.22em] text-moss">LLM Router & Providers</p>
+        <div className="space-y-2 rounded-xl border border-white/10 bg-white/[.06] p-3 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="font-semibold">Vertex AI (Primary)</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+              providers?.vertex?.status === "throttled"
+                ? "bg-amber/20 text-amber"
+                : providers?.vertex?.status === "standby"
+                  ? "bg-white/10 text-white/60"
+                  : "bg-mint/20 text-mint"
+            }`}>
+              {providers?.vertex?.status === "throttled"
+                ? `throttled (${providers.vertex.throttled_remaining_sec}s)`
+                : providers?.vertex?.status || "healthy"}
+            </span>
+          </div>
+          <p className="text-[11px] text-white/50">asia-southeast1 &bull; gemini-2.5-flash</p>
+
+          <div className="mt-2.5 flex items-center justify-between border-t border-white/10 pt-2">
+            <span className="font-semibold">AI Studio (Secondary)</span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+              providers?.ai_studio?.status === "throttled"
+                ? "bg-amber/20 text-amber"
+                : "bg-mint/20 text-mint"
+            }`}>
+              {providers?.ai_studio?.status === "throttled"
+                ? `throttled (${providers.ai_studio.throttled_remaining_sec}s)`
+                : providers?.ai_studio?.status || "healthy"}
+            </span>
+          </div>
+          <p className="text-[11px] text-white/50">Independent free tier pool</p>
+
+          <div className="mt-2.5 flex items-center justify-between border-t border-white/10 pt-2">
+            <span className="font-semibold">Deterministic Fallback</span>
+            <span className="rounded-full bg-mint/20 px-2 py-0.5 text-[10px] font-bold uppercase text-mint">Active</span>
+          </div>
+          <p className="text-[11px] text-white/50">Rule engine floor &bull; 0ms</p>
+        </div>
+      </section>
+
       <section className="mb-7">
         <p className="mb-3 text-[10px] font-bold uppercase tracking-[.22em] text-moss">Live connection</p>
         {health ? Object.entries(health.quality.tables).map(([name, table]) => (
@@ -104,6 +197,7 @@ function Sidebar({ health, loading, refresh }: { health: Health | null; loading:
         {health && <div className="mt-3 flex items-center justify-between text-xs text-white/60"><span>{Math.round(health.data_age_seconds)}s old</span><StatusPill value={health.cache} /></div>}
         <button onClick={refresh} disabled={loading} className="mt-4 w-full rounded-xl bg-mint px-3 py-2.5 text-sm font-bold text-forest transition hover:bg-white disabled:opacity-50">{loading ? "Refreshing…" : "Refresh from monday.com"}</button>
       </section>
+
       {health && <section>
         <p className="mb-3 text-[10px] font-bold uppercase tracking-[.22em] text-moss">Data quality</p>
         <div className="mb-3 rounded-xl border border-white/10 p-3 text-xs"><strong>{dropped} header rows dropped</strong><p className="mt-1 text-white/55">Removed before analysis.</p></div>
@@ -130,6 +224,7 @@ function Sidebar({ health, loading, refresh }: { health: Health | null; loading:
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("ask");
+  const [selectedProvider, setSelectedProvider] = useState<ProviderOption>("auto");
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState("");
   const [loadingHealth, setLoadingHealth] = useState(true);
@@ -161,9 +256,10 @@ export default function Home() {
     setAsking(true);
     setError("");
     try {
+      const providerParam = selectedProvider === "auto" ? null : selectedProvider;
       const result = await api<AskResult>("/api/ask", {
         method: "POST",
-        body: JSON.stringify({ question: clean, history: prior }),
+        body: JSON.stringify({ question: clean, history: prior, provider: providerParam }),
       });
       const initialContent = result.answer || result.clarify || result.error || "";
       const needsNarration = !initialContent && result.action === "sql";
@@ -180,7 +276,7 @@ export default function Home() {
 
       if (needsNarration) {
         try {
-          const narration = await api<{ answer: string; model?: string; latency_ms: number }>("/api/narrate", {
+          const narration = await api<{ answer: string; provider?: string; model?: string; latency_ms: number; provider_chain_attempted?: string[] }>("/api/narrate", {
             method: "POST",
             body: JSON.stringify({
               question: clean,
@@ -190,6 +286,7 @@ export default function Home() {
               rows: result.rows,
               caveats: result.caveats || [],
               history: prior,
+              provider: providerParam,
             }),
           });
           setMessages((old) =>
@@ -199,7 +296,14 @@ export default function Home() {
                     ...m,
                     content: narration.answer || "No narrative produced.",
                     narrating: false,
-                    result: m.result ? { ...m.result, model: narration.model || m.result.model } : m.result,
+                    result: m.result ? {
+                      ...m.result,
+                      answer: narration.answer,
+                      provider: narration.provider || m.result.provider,
+                      model: narration.model || m.result.model,
+                      latency_ms: m.result.latency_ms + (narration.latency_ms || 0),
+                      provider_chain_attempted: narration.provider_chain_attempted || m.result.provider_chain_attempted,
+                    } : m.result,
                   }
                 : m
             )
@@ -218,6 +322,7 @@ export default function Home() {
           );
         }
       }
+      void loadHealth();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Question failed");
     } finally {
@@ -255,9 +360,33 @@ export default function Home() {
             <p className="mt-3 max-w-3xl text-sm leading-relaxed text-slate-600 sm:text-base">Founder-level answers over live monday.com boards, with every SQL query and data-quality limitation visible.</p>
           </header>
 
-          <nav className="mb-6 flex gap-1 overflow-x-auto rounded-2xl border border-forest/10 bg-white p-1.5 shadow-sm w-full">
-            {tabs.map(([key, label]) => <button key={key} onClick={() => setTab(key)} className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-semibold transition ${tab === key ? "bg-forest text-white shadow-sm" : "text-slate-500 hover:bg-mint/40 hover:text-forest"}`}>{label}</button>)}
-          </nav>
+          <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between w-full">
+            <nav className="flex gap-1 overflow-x-auto rounded-2xl border border-forest/10 bg-white p-1.5 shadow-sm">
+              {tabs.map(([key, label]) => <button key={key} onClick={() => setTab(key)} className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-semibold transition ${tab === key ? "bg-forest text-white shadow-sm" : "text-slate-500 hover:bg-mint/40 hover:text-forest"}`}>{label}</button>)}
+            </nav>
+
+            {tab === "ask" && (
+              <div className="flex items-center gap-2 rounded-2xl border border-forest/10 bg-white px-3 py-2 shadow-sm">
+                <span className="text-xs font-bold uppercase tracking-wider text-slate-400">Router:</span>
+                <div className="flex gap-1">
+                  {(["auto", "vertex", "ai_studio", "deterministic"] as ProviderOption[]).map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => setSelectedProvider(p)}
+                      className={`rounded-lg px-2.5 py-1 text-xs font-semibold capitalize transition ${
+                        selectedProvider === p
+                          ? "bg-forest text-white shadow-xs"
+                          : "text-slate-600 hover:bg-paper hover:text-forest"
+                      }`}
+                    >
+                      {p === "ai_studio" ? "AI Studio" : p}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
           {(error || healthError) && <div className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">{error || healthError}</div>}
 
           {tab === "ask" && <section className="w-full">
@@ -270,6 +399,7 @@ export default function Home() {
                 {QUESTIONS.map((item) => <button key={item} onClick={() => void sendQuestion(item)} className="rounded-xl border border-forest/10 bg-paper p-4 text-left text-sm font-medium leading-snug text-forest transition hover:-translate-y-0.5 hover:border-moss hover:bg-mint/40 hover:shadow-sm">{item}</button>)}
               </div>
             </div>}
+
             <div className="space-y-5 w-full">{messages.map((message, index) => <article key={index} className={`w-full rounded-2xl p-5 sm:p-7 shadow-panel transition ${message.role === "user" ? "ml-auto max-w-3xl border border-forest/20 bg-forest text-white" : "border border-forest/10 bg-white"}`}>
               {message.role === "assistant" ? (
                 <div>
@@ -290,14 +420,21 @@ export default function Home() {
                   <p className="text-sm sm:text-base font-medium">{message.content}</p>
                 </div>
               )}
+
               {message.result && <div className="mt-5 border-t border-forest/10 pt-5 space-y-4 w-full">
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500"><StatusPill value={message.result.cache} /><span>{(message.result.latency_ms / 1000).toFixed(1)}s</span>{message.result.model && <span className="font-mono text-[11px] bg-slate-100 px-2 py-0.5 rounded">{message.result.model}</span>}{message.result.action === "unsupported" && <span className="rounded bg-amber/15 px-2 py-0.5 font-bold uppercase tracking-wider text-amber">unsupported</span>}</div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <StatusPill value={message.result.cache} />
+                  <ProviderBadge result={message.result} />
+                  {message.result.action === "unsupported" && <span className="rounded bg-amber/15 px-2 py-0.5 font-bold uppercase tracking-wider text-amber">unsupported</span>}
+                </div>
                 {!!message.result.assumptions?.length && <div className="rounded-xl border border-forest/10 bg-paper/80 p-3 text-xs text-slate-600"><strong className="text-forest">Assumptions:</strong> {message.result.assumptions.join("; ")}</div>}
                 {message.result.sql && <details className="w-full rounded-xl border border-forest/10 bg-paper p-4"><summary className="cursor-pointer text-xs font-bold text-forest hover:text-moss">SQL executed</summary><pre className="mt-3 overflow-x-auto whitespace-pre-wrap font-mono text-xs leading-relaxed text-slate-800 bg-white/80 p-3 rounded-lg border border-forest/5">{message.result.sql}</pre>{!!message.result.attempts?.length && <p className="mt-2 text-xs font-semibold text-amber">Self-corrected {message.result.attempts.length} earlier attempt(s).</p>}</details>}
                 {message.result.rows?.length > 0 && <details className="w-full rounded-xl border border-forest/10 p-4 bg-paper/20" open={true}><summary className="cursor-pointer text-xs font-bold text-forest hover:text-moss">Result data ({message.result.rowcount} rows)</summary><div className="mt-3 w-full"><DataTable rows={message.result.rows} /></div></details>}
               </div>}
             </article>)}</div>
+
             {asking && <div className="my-5 flex items-center gap-2 text-sm text-slate-500"><span className="h-2.5 w-2.5 animate-pulse rounded-full bg-moss" /> Planning, querying and checking the result…</div>}
+
             <form onSubmit={(event: FormEvent) => { event.preventDefault(); void sendQuestion(question); }} className="sticky bottom-4 mt-8 flex gap-2 rounded-2xl border border-forest/10 bg-white/95 p-2.5 shadow-panel backdrop-blur w-full">
               <input value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Ask about pipeline, revenue, sectors, collections…" className="min-w-0 flex-1 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-slate-400 focus:bg-paper" />
               <button disabled={asking || !question.trim()} className="rounded-xl bg-forest px-6 py-3 text-sm font-bold text-white transition hover:bg-ink disabled:opacity-40 shadow-sm">Ask</button>
