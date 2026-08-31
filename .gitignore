@@ -12,3 +12,6 @@ node_modules/
 npm-debug.log*
 tests/.eval_cache.json
 tests/.holdout_eval_cache.json
+results/*.json
+results/*.json.tmp
+results/.provider_bench_cache.json
