@@ -219,10 +219,13 @@ def _v_q20(turn: AgentTurn) -> None:
     )
 
 def _v_q21(turn: AgentTurn) -> None:
-    # Fully paid work orders with zero outstanding: 77 work orders have outstanding_incl_gst = 0.0
+    # "Fully paid" requires a real invoice as well as zero outstanding balance.
+    # There are 77 zero-outstanding work orders, but 63 were never billed; counting
+    # those as paid would confuse "not invoiced" with "paid in full". The correct
+    # definition is billed_incl_gst > 0 AND outstanding_incl_gst = 0, yielding 14.
     frame = _require_sql(turn)
-    assert any(_close(v, 77) or _close(v, 125) or _close(v, 138599252.88, tol=1000.0) for row in frame.itertuples(index=False) for v in row if isinstance(v, (int, float)) and not isinstance(v, bool)), (
-        f"expected 77 zero-outstanding work orders; got {frame.to_dict('records')}"
+    assert any(_close(v, 14) for row in frame.itertuples(index=False) for v in row if isinstance(v, (int, float)) and not isinstance(v, bool)), (
+        f"expected 14 billed-and-fully-paid work orders; got {frame.to_dict('records')}"
     )
 
 def _v_q22(turn: AgentTurn) -> None:

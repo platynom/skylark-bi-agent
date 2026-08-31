@@ -104,4 +104,19 @@ collections") without letting them steer the arithmetic.
 
 Claude (Opus) for architecture, implementation and this document. All design decisions,
 the data-defect inventory, and the test strategy were reviewed and are defensible line by
-line. Gemini 2.5 Flash is the runtime model inside the product itself.
+line. Gemini 3.5 Flash Lite is the runtime model inside the product itself.
+
+## 6. Provider redundancy and model consistency
+
+The production LLM chain is deliberately **Vertex AI `gemini-3.5-flash-lite` on the
+global endpoint → Gemini AI Studio `gemini-3.5-flash-lite` on v1beta → deterministic
+templates**. Vertex and AI Studio use separate quota pools, so a project quota event or
+provider outage does not remove both LLM legs. Both legs intentionally run the same model:
+failover therefore changes transport and quota pool, not answer behaviour. This keeps the
+validated planner semantics stable regardless of which provider serves a request.
+
+No additional Gemini model is placed in the automatic chain. In particular,
+`gemini-2.5-flash` was ruled out as a primary because its measured p95 approached the
+20-second request budget and it had materially more genuine quality failures. A longer
+same-project Vertex model cascade would add apparent legs without adding independent
+failure domains.

@@ -2,17 +2,16 @@
 Multi-provider LLM client with Vertex AI primary, Gemini AI Studio secondary,
 circuit breakers, fast failover, and strict request deadlines.
 
-Target Provider Chain (3 legs):
-  1. Vertex AI          - Primary (regional endpoint: asia-southeast1, no free-tier throttle)
-  2. Gemini AI Studio   - Secondary (independent free pool, already built)
-  3. Deterministic Floor- Built-in fallback rule engine, zero latency, guaranteed 200 OK
+Target provider chain (3 legs):
+  1. Vertex AI           - gemini-3.5-flash-lite on the global endpoint
+  2. Gemini AI Studio    - the same model on its independent quota pool
+  3. Deterministic floor - built-in answer templates when narration is unavailable
 """
 from __future__ import annotations
 
 import base64
 import json
 import logging
-import os
 import random
 import re
 import threading
@@ -33,15 +32,6 @@ except ImportError:
 from . import config
 
 LOGGER = logging.getLogger("skylark.llm")
-
-# Regional Vertex AI endpoint (us-central1 / asia-south1 / asia-southeast1)
-VERTEX_REGION = os.environ.get("VERTEX_REGION", "us-central1")
-VERTEX_PROJECT = os.environ.get("GCP_PROJECT", "project-4f0f85f8-1fbe-4abe-b7e")
-VERTEX_MODEL = os.environ.get("VERTEX_MODEL", "gemini-2.5-flash")
-VERTEX_ENDPOINT_TEMPLATE = (
-    "https://{region}-aiplatform.googleapis.com/v1/projects/{project}/"
-    "locations/{region}/publishers/google/models/{model}:generateContent"
-)
 
 AI_STUDIO_ENDPOINT_TEMPLATE = (
     "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
@@ -132,7 +122,7 @@ class VertexAuthManager:
         now = time.time()
 
         # 1. Base64 Service Account JSON in env
-        sa_b64 = os.environ.get("GCP_SERVICE_ACCOUNT_B64")
+        sa_b64 = config.GCP_SERVICE_ACCOUNT_B64
         if sa_b64:
             try:
                 sa_json = base64.b64decode(sa_b64).decode("utf-8")
@@ -179,7 +169,9 @@ class UnifiedLLM:
         "deterministic": ProviderState(name="deterministic"),
     }
     _session: requests.Session | None = None
-    _disabled_models: set[str] = set()
+    # Availability is provider-specific. The same model name on AI Studio and
+    # Vertex represents two independent failure domains and must not cross-disable.
+    _disabled_models: set[tuple[str, str]] = set()
 
     def __init__(
         self,
@@ -189,11 +181,11 @@ class UnifiedLLM:
         vertex_project: str | None = None,
         vertex_model: str | None = None,
     ):
-        self.api_key = api_key or config.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
+        self.api_key = api_key or config.GEMINI_API_KEY
         self.ai_studio_model = model or config.GEMINI_MODEL or "gemini-2.5-flash"
-        self.vertex_region = vertex_region or VERTEX_REGION
-        self.vertex_project = vertex_project or VERTEX_PROJECT
-        self.vertex_model = vertex_model or VERTEX_MODEL
+        self.vertex_region = vertex_region or config.VERTEX_REGION
+        self.vertex_project = vertex_project or config.GCP_PROJECT
+        self.vertex_model = vertex_model or config.VERTEX_MODEL
 
         if UnifiedLLM._session is None:
             UnifiedLLM._session = requests.Session()
@@ -237,7 +229,7 @@ class UnifiedLLM:
             raise LLMError("Vertex AI credentials not available (no token).")
 
         model = self.vertex_model
-        if model in self._disabled_models:
+        if ("vertex", model) in self._disabled_models:
             raise ModelUnavailableError(f"Vertex model '{model}' was permanently disabled.")
 
         body: dict[str, Any] = {
@@ -251,76 +243,45 @@ class UnifiedLLM:
         if json_mode:
             body["generationConfig"]["responseMimeType"] = "application/json"
 
-        regions_to_try = [self.vertex_region]
-        for fallback_reg in ("asia-south1", "us-central1", "europe-west4"):
-            if fallback_reg not in regions_to_try:
-                regions_to_try.append(fallback_reg)
-
-        last_vertex_err: Exception | None = None
-
-        for region in regions_to_try:
-            url = VERTEX_ENDPOINT_TEMPLATE.format(
-                region=region,
-                project=self.vertex_project,
-                model=model,
+        region = self.vertex_region
+        host = "aiplatform.googleapis.com" if region == "global" else f"{region}-aiplatform.googleapis.com"
+        url = (
+            f"https://{host}/v1/projects/{self.vertex_project}/locations/{region}/"
+            f"publishers/google/models/{model}:generateContent"
+        )
+        timeout = max(1.0, min(20.0, deadline - time.time()))
+        if time.time() >= deadline:
+            raise LLMError("Request deadline exceeded before Vertex call.")
+        try:
+            resp = self._session.post(
+                url,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                json=body,
+                timeout=timeout,
             )
+        except requests.Timeout as exc:
+            raise RateLimitError(f"Vertex {region} call timed out.") from exc
+        except requests.RequestException as exc:
+            raise LLMError(f"Vertex {region} network failure: {exc}") from exc
 
-            # Fast retry on 429 / failure
-            for attempt in range(2):
-                timeout = max(1.0, min(10.0, deadline - time.time()))
-                if time.time() >= deadline:
-                    raise LLMError("Request deadline exceeded before Vertex call.")
-
-                try:
-                    resp = self._session.post(
-                        url,
-                        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-                        json=body,
-                        timeout=timeout,
-                    )
-                except requests.Timeout as exc:
-                    last_vertex_err = RateLimitError(f"Vertex {region} call timed out.")
-                    break
-                except requests.RequestException as exc:
-                    last_vertex_err = LLMError(f"Vertex {region} network failure: {exc}")
-                    if attempt == 0 and (time.time() + 1.0) < deadline:
-                        time.sleep(0.2)
-                        continue
-                    break
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    cands = data.get("candidates") or []
-                    if not cands:
-                        fb = (data.get("promptFeedback") or {}).get("blockReason")
-                        raise LLMError(f"Vertex returned no candidates{f' ({fb})' if fb else ''}.")
-                    parts = (cands[0].get("content") or {}).get("parts") or []
-                    text = "".join(p.get("text", "") for p in parts).strip()
-                    if not text:
-                        raise LLMError("Vertex returned empty response.")
-                    return text
-
-                if resp.status_code == 429:
-                    last_vertex_err = RateLimitError(f"Vertex {region} rate limit (429).")
-                    if attempt == 0 and (time.time() + 1.5) < deadline:
-                        time.sleep(1.0 + random.uniform(0.1, 0.5))
-                        continue
-                    break  # advance to next region
-
-                if resp.status_code == 404:
-                    break  # try next region
-
-                if resp.status_code in (500, 502, 503, 504):
-                    last_vertex_err = LLMError(f"Vertex {region} upstream HTTP {resp.status_code}")
-                    if attempt == 0 and (time.time() + 1.0) < deadline:
-                        time.sleep(0.3)
-                        continue
-                    break
-
-                last_vertex_err = LLMError(f"Vertex {region} HTTP {resp.status_code}: {resp.text[:200]}")
-                break
-
-        raise last_vertex_err or RateLimitError("Vertex regions exhausted.")
+        if resp.status_code == 200:
+            data = resp.json()
+            cands = data.get("candidates") or []
+            if not cands:
+                fb = (data.get("promptFeedback") or {}).get("blockReason")
+                raise LLMError(f"Vertex returned no candidates{f' ({fb})' if fb else ''}.")
+            parts = (cands[0].get("content") or {}).get("parts") or []
+            text = "".join(p.get("text", "") for p in parts).strip()
+            if not text:
+                raise LLMError("Vertex returned empty response.")
+            return text
+        if resp.status_code == 429:
+            raise RateLimitError(f"Vertex {region} rate limit (429).")
+        if resp.status_code == 404:
+            raise ModelUnavailableError(f"Vertex model '{model}' is unavailable on {region}.")
+        if resp.status_code in (500, 502, 503, 504):
+            raise LLMError(f"Vertex {region} upstream HTTP {resp.status_code}")
+        raise LLMError(f"Vertex {region} HTTP {resp.status_code}: {resp.text[:200]}")
 
     def _call_ai_studio(
         self,
@@ -351,7 +312,7 @@ class UnifiedLLM:
         last_err: Exception | None = None
 
         for model in models:
-            if model in self._disabled_models:
+            if ("ai_studio", model) in self._disabled_models:
                 continue
 
             url = AI_STUDIO_ENDPOINT_TEMPLATE.format(model=model)
@@ -397,7 +358,7 @@ class UnifiedLLM:
                     raise RateLimitError("AI Studio rate limit (429).")
 
                 if resp.status_code == 404:
-                    self._disabled_models.add(model)
+                    self._disabled_models.add(("ai_studio", model))
                     last_err = ModelUnavailableError(f"AI Studio model '{model}' unavailable.")
                     break  # try next model
 
@@ -440,11 +401,11 @@ class UnifiedLLM:
             provider_plan = ["ai_studio"]
         elif target == "deterministic":
             provider_plan = ["deterministic"]
-        else:  # "auto"
+        else:  # "auto": two independent quota pools, then the caller's deterministic floor
             if self._states["vertex"].status == "healthy":
                 provider_plan = ["vertex", "ai_studio"]
             else:
-                provider_plan = ["ai_studio", "vertex"]
+                provider_plan = ["ai_studio"]
 
         last_error: Exception | None = None
 
