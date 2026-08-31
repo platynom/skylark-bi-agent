@@ -6,6 +6,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import sys
 from pathlib import Path
@@ -19,6 +20,15 @@ def load_run(path: Path) -> dict[str, Any]:
         raise ValueError(f"{path} is not a provider benchmark result")
     document["_path"] = str(path)
     return document
+
+
+def expand_paths(patterns: list[str]) -> list[Path]:
+    """Expand shell-style patterns even on Windows shells that pass them literally."""
+    paths: list[Path] = []
+    for pattern in patterns:
+        matches = sorted(glob.glob(pattern)) if any(char in pattern for char in "*?[") else [pattern]
+        paths.extend(Path(match) for match in matches)
+    return paths
 
 
 def configuration_name(run: dict[str, Any]) -> str:
@@ -88,10 +98,14 @@ def disagreements(runs: list[dict[str, Any]]) -> list[tuple[str, str, list[str]]
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Compare provider benchmark result files.")
-    parser.add_argument("files", nargs="+", type=Path)
+    parser.add_argument("files", nargs="+")
     args = parser.parse_args(argv)
+    paths = expand_paths(args.files)
+    if not paths:
+        print("ERROR: no benchmark result files matched", file=sys.stderr)
+        return 2
     try:
-        runs = [load_run(path) for path in args.files]
+        runs = [load_run(path) for path in paths]
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

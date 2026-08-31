@@ -1,9 +1,9 @@
 """Offline unit checks for the provider benchmark tooling."""
 from __future__ import annotations
 
-import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -15,7 +15,7 @@ from scripts.bench_providers import (
     classify_case,
     summarize,
 )
-from scripts.compare_runs import disagreements
+from scripts.compare_runs import disagreements, expand_paths
 from scripts.probe_models import probe_one
 from tests.test_questions import _validate_overlap
 
@@ -145,6 +145,13 @@ class BenchmarkToolingTests(unittest.TestCase):
         found = disagreements([run("vertex", "a"), run("ai_studio", "b")])
         self.assertEqual(len(found), 1)
         self.assertEqual(found[0][0], "tuned:Q01")
+
+    def test_compare_expands_windows_literal_glob(self) -> None:
+        with patch("scripts.compare_runs.glob.glob", return_value=["results/b.json", "results/a.json"]):
+            self.assertEqual(
+                expand_paths(["results/*.json"]),
+                [Path("results/a.json"), Path("results/b.json")],
+            )
 
 
 if __name__ == "__main__":
