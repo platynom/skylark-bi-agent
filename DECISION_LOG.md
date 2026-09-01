@@ -51,15 +51,17 @@ never spends a narration call.
 receives a finished metrics object and writes prose around it. A hallucinated figure in a
 board deck is unrecoverable; slightly stiffer prose is not.
 
-**5-minute cache instead of per-turn fetch.** The brief forbids hardcoding CSV data, not
-caching. Re-pulling 520 items on every conversational turn burns monday's complexity
-budget and adds seconds to each answer. TTL is 300s with a manual refresh button, and the
-sidebar always shows data age.
+**Shared warehouse and question caches instead of per-turn fetch.** The brief forbids
+hardcoding CSV data, not caching. Re-pulling 520 items on every serverless invocation burns
+monday's complexity budget and adds seconds to each answer. Vercel therefore uses a
+30-minute Supabase snapshot containing Parquet dataframes plus schema/quality metadata, and
+a separate 15-minute normalized-question cache for verified responses. Either cache can fail
+open to the live pipeline; Streamlit retains its 300-second in-process TTL and manual refresh.
 
-**Gemini over raw REST, no vendor SDK.** The Google GenAI Python packages have shipped
-several incompatible interfaces; a hosted demo that breaks because a transitive pin moved
-is a bad trade for two convenience methods. `requests` plus a documented JSON contract is
-stable, and model fallback (`2.5-flash` → `2.0-flash` → `flash-latest`) is three lines.
+**Gemini over explicit HTTP transports, no vendor SDK.** The Google GenAI Python packages
+have shipped several incompatible interfaces; a hosted demo that breaks because a transitive
+pin moved is a bad trade for two convenience methods. `requests` plus documented Vertex and
+AI Studio contracts keeps authentication, timeouts, provider identity, and failover visible.
 
 **Streamlit on Streamlit Community Cloud.** A React/FastAPI split would demo better for a
 full-stack role. With a five-hour budget, infrastructure time is time not spent on the data
@@ -87,18 +89,15 @@ collections") without letting them steer the arithmetic.
 1. **Resolve the customer-key ambiguity properly** — fuzzy-match `COMPANY*` to `WOCOMPANY*`
    via deal name, sector and amount overlap, score the mapping, and expose it as a
    reviewable crosswalk table rather than refusing the join.
-2. **Semantic caching and a golden-question set.** ~20 founder questions with hand-verified
-   answers, run as a regression suite on every prompt change. Right now the SQL layer is
-   tested; the model's interpretation of business language is not.
+2. **Automate evals in CI.** The repository now has a canonical/paraphrase suite and a
+   separately scored held-out suite; the next step is running both against candidate prompts
+   before every production merge and retaining score history.
 3. **Charts.** Numbers plus a stage funnel and an AR ageing bar would land better in a
    leadership context than a table.
 4. **Push the read-only guarantee into the token**, not just the client. The code refuses
    mutations, but a scoped monday token would make it structural.
-5. **Row-level provenance** — link each result row back to its monday item URL, so a
-   founder can click from a number to the record behind it.
-6. **A cheaper narration path.** Two LLM calls per question is fine for a demo and wrong
-   for a team of ten asking all day; deterministic templates for the common question shapes
-   with the model reserved for genuinely novel ones.
+5. **Keyless Vertex authentication** — use Vercel OIDC/workload identity federation so the
+   primary leg can authenticate without a service-account key.
 
 ## 5. AI tools used
 
@@ -120,3 +119,16 @@ No additional Gemini model is placed in the automatic chain. In particular,
 20-second request budget and it had materially more genuine quality failures. A longer
 same-project Vertex model cascade would add apparent legs without adding independent
 failure domains.
+
+The deterministic template floor is intentionally part of the product contract, not just
+an emergency error string. Planning and execution can succeed even when narration quota is
+exhausted; discarding those verified rows and telling the user that the whole query failed
+would be both slower and less truthful. Templates cover common scalar, ranked, grouped, and
+list results, preserve assumptions, and use server-formatted currency. They provide useful
+first content during the two-phase flow and a complete answer if every LLM leg fails.
+
+Vertex is configured in production but not yet authenticated. The organization policy
+`constraints/iam.disableServiceAccountKeyCreation` prevents the service-account key path,
+so the observed healthy chain is currently `vertex (error) → ai_studio`, followed by
+circuit-breaker skips of Vertex. Keyless OIDC federation is deferred work; this expected
+transport failure is not a reason to revert otherwise correct application code.
