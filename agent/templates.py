@@ -851,10 +851,11 @@ TEMPLATES: list[QueryTemplate] = [
 # --------------------------------------------------------------------------- #
 
 # Justification for threshold:
-# A score of >= 0.35 indicates that at least two-thirds of the query's core
-# domain tokens match the template intent and satisfies all required keyword
-# constraints without triggering any prohibited negative tokens.
-TEMPLATE_MATCH_THRESHOLD: float = 0.35
+# 0.41 is deliberately just above the highest observed false-positive score
+# (0.400 for an age/staleness question incorrectly matching the generic open
+# pipeline total).  The deterministic floor should prefer an honest unsupported
+# response to a plausible-but-wrong SQL answer during a provider outage.
+TEMPLATE_MATCH_THRESHOLD: float = 0.41
 
 
 def tokenize(text: str) -> list[str]:
