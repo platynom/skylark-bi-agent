@@ -425,6 +425,15 @@ def _handle_deterministic_floor(
     if template and score >= TEMPLATE_MATCH_THRESHOLD:
         try:
             df = run_sql(wh, template.sql)
+            # Templates are code rather than model output, but they still use the
+            # same provenance contract as every other query path.  Keeping this
+            # guard here prevents a future row-detail template from silently
+            # losing its monday.com source link.
+            if _missing_row_provenance(template.sql, df):
+                raise UnsafeQuery(
+                    "Row-level deterministic template results must SELECT item_id "
+                    "so every row can link to its monday.com source record."
+                )
             turn.action = "sql"
             turn.sql = template.sql
             turn.intent = template.intent

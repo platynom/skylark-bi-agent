@@ -34,11 +34,15 @@ class DeadLLM(UnifiedLLM):
         self.last_model = "none"
         self.last_latency_ms = 0.0
         self.last_chain = ["vertex (429)", "ai_studio (429)"]
+        self.generate_calls = 0
+        self.generate_json_calls = 0
 
     def generate(self, *args: Any, **kwargs: Any) -> str:
+        self.generate_calls += 1
         raise LLMError("Simulated LLM outage: live capacity exhausted across all providers (429).")
 
     def generate_json(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        self.generate_json_calls += 1
         raise LLMError("Simulated LLM outage: live capacity exhausted across all providers (429).")
 
 
@@ -186,9 +190,13 @@ def test_narrator_skips_when_providers_throttled() -> None:
         for k in ("vertex", "ai_studio"):
             states[k].throttled_until = 9999999999.0
 
-        # With all live providers throttled, narrate_turn must use fallback without calling LLM
-        narrative = answer_question(wh, turn.question, llm=DeadLLM())
+        # With all live providers throttled, narrate_turn must use the fallback
+        # before attempting its prose generation call.
+        dead_llm = DeadLLM()
+        narrative = answer_question(wh, turn.question, llm=dead_llm)
         assert narrative.answer is not None and len(narrative.answer) > 0
+        assert dead_llm.generate_json_calls == 1  # planner only
+        assert dead_llm.generate_calls == 0, "Narrator should skip the LLM when every live provider is unavailable"
     finally:
         for k, val in orig_throttled.items():
             states[k].throttled_until = val
