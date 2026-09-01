@@ -63,10 +63,10 @@ have shipped several incompatible interfaces; a hosted demo that breaks because 
 pin moved is a bad trade for two convenience methods. `requests` plus documented Vertex and
 AI Studio contracts keeps authentication, timeouts, provider identity, and failover visible.
 
-**Streamlit on Streamlit Community Cloud.** A React/FastAPI split would demo better for a
-full-stack role. With a five-hour budget, infrastructure time is time not spent on the data
-layer — which is where this brief actually concentrates its difficulty. Free, public,
-secrets-managed, zero deploy config.
+**Dual deployment surfaces.** The original Streamlit Community Cloud application remains a
+simple public fallback and validates the Python UI path. The primary evaluator experience is
+now a Next.js frontend with a FastAPI serverless API on Vercel, which adds responsive two-phase
+answers, shared Supabase caches, row provenance, and independent provider-capacity testing.
 
 ## 3. How I interpreted "leadership updates"
 
@@ -96,14 +96,16 @@ collections") without letting them steer the arithmetic.
    leadership context than a table.
 4. **Push the read-only guarantee into the token**, not just the client. The code refuses
    mutations, but a scoped monday token would make it structural.
-5. **Keyless Vertex authentication** — use Vercel OIDC/workload identity federation so the
-   primary leg can authenticate without a service-account key.
+5. **Automate identity and capacity canaries** — continuously verify WIF token exchange and
+   run small concurrent probes before production promotion instead of relying on a manual
+   acceptance run.
 
 ## 5. AI tools used
 
-Claude (Opus) for architecture, implementation and this document. All design decisions,
-the data-defect inventory, and the test strategy were reviewed and are defensible line by
-line. Gemini 3.5 Flash Lite is the runtime model inside the product itself.
+Claude (Opus) and OpenAI Codex were used across architecture, implementation, evaluation,
+deployment verification, and documentation. All design decisions, the data-defect inventory,
+and the test strategy were reviewed and are defensible line by line. Gemini 3.5 Flash Lite is
+the runtime model inside the product itself.
 
 ## 6. Provider redundancy and model consistency
 
@@ -127,8 +129,23 @@ would be both slower and less truthful. Templates cover common scalar, ranked, g
 list results, preserve assumptions, and use server-formatted currency. They provide useful
 first content during the two-phase flow and a complete answer if every LLM leg fails.
 
-Vertex is configured in production but not yet authenticated. The organization policy
-`constraints/iam.disableServiceAccountKeyCreation` prevents the service-account key path,
-so the observed healthy chain is currently `vertex (error) → ai_studio`, followed by
-circuit-breaker skips of Vertex. Keyless OIDC federation is deferred work; this expected
-transport failure is not a reason to revert otherwise correct application code.
+Vertex now authenticates keylessly through **Vercel OIDC → Google Workload Identity
+Federation → service-account impersonation**. Team-scoped issuer and audience validation are
+combined with an immutable Vercel project-ID condition and separate `preview`/`production`
+subjects. Both subjects receive only `roles/iam.workloadIdentityUser` on the dedicated service
+account; that account holds only `roles/aiplatform.user` in the project. No service-account
+JSON key exists, and the per-request OIDC and Google access tokens are neither persisted nor
+logged.
+
+The acceptance run proved both identities independently. Preview and Production each returned
+`vertex.status = healthy`, `last_error = null`, and a successful first-hop Vertex chain with
+zero Vertex failures. Production handled 20 concurrent founder questions with 1
+application-level planner JSON error and 30 with 2, versus the pre-WIF AI Studio-only baseline
+of 18 errors at 20 concurrent. All 50 production requests returned HTTP 200 and all 50 model
+calls reached Vertex. Warm production health remained 344 deals / 176 work orders, and the
+currency guard rendered the audited open pipeline as `Rs 68.82 Cr`.
+
+The final regression scores are **82/82** on the canonical/paraphrase suite and **40/40** on
+the held-out suite. “Fully paid” is pinned to `billed_incl_gst > 0 AND
+outstanding_incl_gst = 0`, preventing 63 never-billed zero-outstanding rows from being counted
+as paid.

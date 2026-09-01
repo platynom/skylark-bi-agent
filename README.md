@@ -4,7 +4,7 @@ A conversational business-intelligence agent that answers founder-level question
 live monday.com boards — **Deals** (sales pipeline) and **Work Orders** (project execution
 and billing).
 
-> *"How's our pipeline looking for the renewables sector this quarter?"*
+> *"How's our pipeline looking for the renewables sector?"*
 > → interprets the question, writes SQL against the live boards, runs it, and answers with
 > context **plus the data-quality caveats that qualify the number.**
 
@@ -68,10 +68,20 @@ breaker; the UI/API expose the serving provider and the complete attempted chain
 Vertex attempt therefore falls through immediately, and subsequent calls skip it while its
 circuit is open.
 
-The Vertex leg is configured in production but is **not yet authenticated** because the GCP
-organization policy `constraints/iam.disableServiceAccountKeyCreation` blocks service-account
-key creation. Until keyless OIDC federation is added, `vertex (error) → ai_studio` is the
-expected healthy production path, not a deployment failure.
+Vertex authenticates on Vercel without a stored private key. Vercel supplies a short-lived
+per-request OIDC token, Google Workload Identity Federation validates that it belongs to this
+exact Vercel project and its `preview` or `production` environment, and Google then issues a
+short-lived token by impersonating a dedicated service account holding only
+`roles/aiplatform.user`. The application never stores or logs the OIDC token or Google access
+token. Preview and Production were tested independently because they are separate federated
+subjects; both returned `vertex (healthy)` with zero authentication failures and a first-hop
+Vertex success.
+
+The deployed capacity check completed 20 concurrent founder questions with 1 application-level
+planner JSON error and 30 concurrent questions with 2; every HTTP response was 200 and every
+model call reached Vertex. The previous AI Studio-only baseline failed 18 of 20 concurrent
+questions under quota pressure. Streamlit and local runs do not receive Vercel's OIDC header;
+they use local Google ADC when present or the independent AI Studio leg otherwise.
 
 ### Caching and two-phase answers
 
@@ -123,8 +133,8 @@ Full rationale and trade-offs: **[DECISION_LOG.md](DECISION_LOG.md)**.
 
 1. Create a monday.com account (free trial is enough).
 2. **+ Add → Import data → Excel/CSV**, upload `monday_import/deals.csv`,
-   name the board **`Deals`**.
-3. Repeat with `monday_import/work_orders.csv`, name it **`Work Orders`**.
+   name the board **`Skylark Deals`**.
+3. Repeat with `monday_import/work_orders.csv`, name it **`Skylark Work Orders`**.
    Accept monday's auto-detected column types — the agent reads raw text and normalises it
    itself, so board-side typing does not matter.
 4. **Avatar (bottom-left) → Developers → My Access Tokens → Show** and copy the token.
@@ -150,8 +160,11 @@ Full rationale and trade-offs: **[DECISION_LOG.md](DECISION_LOG.md)**.
 |---|---|---|
 | `MONDAY_API_TOKEN` | yes | monday.com API v2 token |
 | `GEMINI_API_KEY` | yes | https://aistudio.google.com/apikey (free tier is sufficient) |
-| `GCP_SERVICE_ACCOUNT_B64` | for Vertex | Base64-encoded Vertex service-account JSON; superseded by planned keyless OIDC |
 | `GCP_PROJECT` | for Vertex | Vertex AI project ID |
+| `GCP_PROJECT_NUMBER` | for Vercel Vertex | Numeric project number used in the WIF audience |
+| `GCP_SERVICE_ACCOUNT_EMAIL` | for Vercel Vertex | Dedicated Vertex service account to impersonate |
+| `GCP_WORKLOAD_IDENTITY_POOL_ID` | for Vercel Vertex | Workload Identity pool ID; deployed value is `vercel-skylark` |
+| `GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID` | for Vercel Vertex | OIDC provider ID; deployed value is `vercel` |
 | `VERTEX_REGION` | no | Vertex endpoint region; default `global` |
 | `VERTEX_MODEL` | no | Vertex model; default `gemini-3.5-flash-lite` |
 | `SUPABASE_URL` | for shared cache | Supabase project URL used by the Vercel API |
@@ -173,6 +186,21 @@ cp .streamlit/secrets.toml.example .streamlit/secrets.toml
 
 streamlit run app.py
 ```
+
+## Deploy (Vercel)
+
+1. Import the GitHub repository into Vercel with the Next.js framework preset.
+2. In **Project Settings → Security**, enable **Secure backend access with OIDC federation**
+   in Team issuer mode.
+3. In GCP, create an OIDC Workload Identity provider for the Vercel team issuer and audience.
+   Restrict it to this immutable Vercel project ID and `preview`/`production` environments.
+4. Grant those two exact federated subjects `roles/iam.workloadIdentityUser` on a dedicated
+   service account. The service account itself holds only `roles/aiplatform.user`.
+5. Add the five non-secret `GCP_*` identifiers above to Preview and Production. Do not create
+   a service-account JSON key and do not manually store `VERCEL_OIDC_TOKEN`; Vercel injects it
+   into each Function request as `x-vercel-oidc-token`.
+6. Deploy Preview and verify a chain beginning with successful `vertex (...)` before promoting
+   to Production.
 
 ## Deploy (Streamlit Community Cloud)
 
@@ -197,7 +225,7 @@ The model planner is measured by two suites and the scores are reported separate
 
 - **Canonical + paraphrase suite:** **82/82 passed (100%)** — 20 founder benchmarks plus
   62 natural paraphrases used during prompt development.
-- **Held-out generalization suite:** **39/40 passed (97.5%)** — 40 previously unseen
+- **Held-out generalization suite:** **40/40 passed (100%)** — 40 previously unseen
   questions kept separate from the tuning suite.
 
 The canonical suite also ends with a **ground-truth reconciliation** that compares the
@@ -214,9 +242,9 @@ without a token. It is a fixture only — the application always reads from the 
   non-unique masked deal name and is caveated on every answer that uses it.
 - Collection dates are not tracked on the board, so DSO and AR ageing are impossible.
 - Probability weights (0.75 / 0.45 / 0.20) are our assumption, not Skylark's.
-- Vertex is configured but cannot authenticate in production until keyless OIDC federation
-  replaces the organization-blocked service-account-key path; AI Studio currently serves the
-  model-backed leg.
+- Vercel OIDC federation is deployment-specific. Streamlit Community Cloud does not emit a
+  Vercel OIDC token, so that secondary UI uses local ADC if configured or transparently serves
+  through the validated AI Studio leg.
 
 ## Project layout
 
@@ -226,7 +254,7 @@ agent/config.py            Secrets and tuning (Streamlit secrets → env → def
 agent/monday_client.py     GraphQL v2 client, pagination, backoff, read-only guard
 agent/normalize.py         Cleaning, type coercion, quality profiling
 agent/warehouse.py         DuckDB load, runtime schema document, SQL safety guard
-agent/llm.py               Vertex → AI Studio router, deadlines, circuit breakers
+agent/llm.py               Vercel OIDC/WIF auth, Vertex → AI Studio router and circuit breakers
 agent/agent.py             Plan → execute → narrate orchestration
 agent/leadership.py        Deterministic metrics + narrative generation
 api/_warehouse_cache.py    Supabase Parquet warehouse + normalized-question caches
