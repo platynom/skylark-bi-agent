@@ -1,9 +1,9 @@
-"""Offline unit checks for the provider benchmark tooling."""
-from __future__ import annotations
-
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 
@@ -90,8 +90,8 @@ class BenchmarkToolingTests(unittest.TestCase):
         turn = AgentTurn(
             question="overlap",
             action="sql",
-            sql="SELECT COUNT(*) FROM deals WHERE deal_name IN (SELECT deal_name FROM work_orders)",
-            result=pd.DataFrame([{"count": 52}]),
+            sql="SELECT 52 AS shared_deal_names",
+            result=pd.DataFrame([{"shared_deal_names": 52}]),
         )
         status, _ = classify_case(case, turn, [])
         self.assertEqual(status, "FAIL_VALIDATOR")

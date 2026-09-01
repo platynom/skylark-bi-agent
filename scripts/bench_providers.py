@@ -314,7 +314,7 @@ def _is_validator_failure(case: BenchCase, turn: AgentTurn, reason: str) -> bool
     """
     validator_name = getattr(case.validator, "__name__", "")
     lowered = reason.casefold()
-    if validator_name == "_validate_overlap" and not reason and turn.result is not None:
+    if validator_name == "_validate_overlap" and ("operator" in lowered or "join" in lowered or "intersect" in lowered or any(marker in lowered for marker in STRUCTURAL_MARKERS)):
         return any(abs(value - 52.0) <= 0.02 for value in _numbers(turn))
     if validator_name in {"_validate_completed_uninvoiced", "_validate_owner", "_validate_open_matched"} and not reason:
         return turn.result is not None

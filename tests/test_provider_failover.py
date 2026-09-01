@@ -1,8 +1,9 @@
-"""Offline checks for the production provider chain."""
-from __future__ import annotations
-
+import sys
 import unittest
+from pathlib import Path
 from unittest.mock import patch
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent import config
 from agent.llm import ProviderState, RateLimitError, UnifiedLLM, VertexAuthManager
