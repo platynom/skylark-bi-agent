@@ -4,7 +4,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from agent.llm import ProviderState, RateLimitError, UnifiedLLM
+from agent import config
+from agent.llm import ProviderState, RateLimitError, UnifiedLLM, VertexAuthManager
 
 
 class ProviderFailoverTests(unittest.TestCase):
@@ -44,6 +45,37 @@ class ProviderFailoverTests(unittest.TestCase):
         model = "gemini-3.5-flash-lite"
         UnifiedLLM._disabled_models.add(("ai_studio", model))
         self.assertNotIn(("vertex", model), UnifiedLLM._disabled_models)
+
+    def test_vercel_oidc_uses_wif_service_account_impersonation(self) -> None:
+        class FakeCredentials:
+            token = "short-lived-google-token"
+            expiry = None
+
+            def refresh(self, request) -> None:
+                return None
+
+        with (
+            patch.object(config, "GCP_PROJECT_NUMBER", "1019474383903"),
+            patch.object(config, "GCP_SERVICE_ACCOUNT_EMAIL", "vertex@example.iam.gserviceaccount.com"),
+            patch.object(config, "GCP_WORKLOAD_IDENTITY_POOL_ID", "vercel-skylark"),
+            patch.object(config, "GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID", "vercel"),
+            patch("agent.llm.identity_pool.Credentials", return_value=FakeCredentials()) as factory,
+        ):
+            token, expiry = VertexAuthManager()._mint_token("vercel.oidc.jwt")
+
+        self.assertEqual(token, "short-lived-google-token")
+        self.assertGreater(expiry, 0)
+        kwargs = factory.call_args.kwargs
+        self.assertEqual(
+            kwargs["audience"],
+            "//iam.googleapis.com/projects/1019474383903/locations/global/"
+            "workloadIdentityPools/vercel-skylark/providers/vercel",
+        )
+        self.assertIn("projects/-/serviceAccounts/vertex@example.iam.gserviceaccount.com", kwargs["service_account_impersonation_url"])
+        self.assertEqual(
+            kwargs["subject_token_supplier"].get_subject_token(None, None),
+            "vercel.oidc.jwt",
+        )
 
 
 if __name__ == "__main__":
