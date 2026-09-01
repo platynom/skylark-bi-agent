@@ -20,11 +20,14 @@ SYNONYMS: dict[str, str] = {
     # Receivables / Accounts Receivable / AR
     "receivable": "receivables",
     "receivables": "receivables",
-    "outstanding": "receivables",
+    "outstanding": "outstanding",
     "ar": "receivables",
     "unpaid": "receivables",
     "due": "receivables",
     "overdue": "receivables",
+    "owing": "outstanding",
+    "owe": "outstanding",
+    "exposure": "outstanding",
     # Won / Win / Deals won
     "win": "win",
     "won": "win",
@@ -34,9 +37,11 @@ SYNONYMS: dict[str, str] = {
     "pipeline": "pipeline",
     "opportunities": "pipeline",
     "opportunity": "pipeline",
-    "leads": "pipeline",
+    "lead": "deals",
+    "leads": "deals",
     "opps": "pipeline",
     "open": "pipeline",
+    "book": "pipeline",
     # Billed / Invoiced / Invoices
     "billed": "billed",
     "billing": "billed",
@@ -65,6 +70,13 @@ SYNONYMS: dict[str, str] = {
     "owners": "owner",
     "rep": "owner",
     "reps": "owner",
+    "holds": "owner",
+    "holding": "owner",
+    # Work order / project language
+    "job": "work_order",
+    "jobs": "work_order",
+    "project": "work_order",
+    "projects": "work_order",
     # Completed / Finished
     "completed": "completed",
     "finished": "completed",
@@ -106,6 +118,7 @@ STOPWORDS: set[str] = {
     "summarize", "find", "between", "each", "across", "per", "so", "far", "there",
     "been", "haven", "t", "s", "was", "were", "it", "its", "their", "them", "these",
     "those", "at", "into", "as", "out", "up", "down", "break", "carried", "carry",
+    "money", "people", "still", "us", "using", "only", "worth",
 }
 
 # --------------------------------------------------------------------------- #
@@ -235,7 +248,7 @@ TEMPLATES: list[QueryTemplate] = [
     QueryTemplate(
         id="outstanding_receivables_total",
         intent="Total outstanding receivables and billing",
-        keywords=("receivables", "total", "ar", "exposure", "unpaid", "balance", "amount"),
+        keywords=("receivables", "outstanding", "total", "ar", "exposure", "unpaid", "balance", "amount"),
         sql="""
             SELECT 
                 COUNT(*) AS total_work_orders,
@@ -250,7 +263,7 @@ TEMPLATES: list[QueryTemplate] = [
     QueryTemplate(
         id="receivables_by_sector",
         intent="Outstanding receivables grouped by sector",
-        keywords=("receivables", "sector", "concentrated", "concentration", "breakdown", "industry", "vertical"),
+        keywords=("receivables", "outstanding", "sector", "concentrated", "concentration", "breakdown", "industry", "vertical"),
         sql="""
             SELECT 
                 COALESCE(sector, 'Unknown') AS sector,
@@ -437,11 +450,11 @@ TEMPLATES: list[QueryTemplate] = [
         """,
         required_keywords=("average", "win"),
     ),
-    # 18. Dead deals by stage / reason
+    # 18. Dead deals by recorded loss reason/stage
     QueryTemplate(
-        id="dead_deals_by_stage",
-        intent="Dead deals grouped by loss stage/reason",
-        keywords=("dead", "stage", "lost", "reason", "deals", "loss", "potential", "revenue"),
+        id="dead_deals_by_reason",
+        intent="Dead deals grouped by recorded loss reason/stage",
+        keywords=("dead", "reason", "loss", "stage", "lost", "deals", "potential", "revenue"),
         sql="""
             SELECT 
                 COALESCE(deal_stage, 'Unknown') AS deal_stage,
@@ -489,7 +502,7 @@ TEMPLATES: list[QueryTemplate] = [
             GROUP BY execution_status
             ORDER BY work_order_count DESC
         """,
-        required_keywords=("work_order", "status"),
+        required_keywords=("work_order", "execution_status"),
     ),
     # 21. Contracted revenue by fiscal quarter
     QueryTemplate(
@@ -882,6 +895,9 @@ def tokenize(text: str) -> list[str]:
     t = re.sub(r"\bzero\s+billing\b", " unbilled ", t)
     t = re.sub(r"\bzero\s+billed\b", " unbilled ", t)
     t = re.sub(r"\bfully\s+paid\b", " fully_paid ", t)
+    t = re.sub(r"\bclosed\s+outcomes?\b", " win dead ", t)
+    t = re.sub(r"\bloss\s+reason\b", " dead reason ", t)
+    t = re.sub(r"\bzero\s+invoice(?:\s+amount)?\b", " unbilled ", t)
     t = re.sub(r"\bprobability\s+weighted\b", " weighted ", t)
     t = re.sub(r"\bweighted\s+pipeline\b", " weighted ", t)
     t = re.sub(r"\braw\s+pipeline\b", " pipeline raw ", t)
