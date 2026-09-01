@@ -851,11 +851,12 @@ TEMPLATES: list[QueryTemplate] = [
 # --------------------------------------------------------------------------- #
 
 # Justification for threshold:
-# 0.41 is deliberately just above the highest observed false-positive score
-# (0.400 for an age/staleness question incorrectly matching the generic open
-# pipeline total).  The deterministic floor should prefer an honest unsupported
-# response to a plausible-but-wrong SQL answer during a provider outage.
-TEMPLATE_MATCH_THRESHOLD: float = 0.41
+# 0.44 is deliberately just above the highest observed false-positive score
+# (0.438 for an owner-ranking question incorrectly matching the largest
+# individual open deal; an earlier age/staleness false positive scored 0.400).
+# The deterministic floor should prefer an honest unsupported response to a
+# plausible-but-wrong SQL answer during a provider outage.
+TEMPLATE_MATCH_THRESHOLD: float = 0.44
 
 
 def tokenize(text: str) -> list[str]:
