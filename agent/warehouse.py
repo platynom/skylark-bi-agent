@@ -40,6 +40,7 @@ class Warehouse:
     quality: dict[str, TableQuality]
     loaded_at: float
     board_ids: dict[str, str]
+    _schema_doc: str | None = None
 
     @property
     def age_seconds(self) -> float:
@@ -126,6 +127,8 @@ _FIELD_NOTES = {
 def schema_document(wh: Warehouse) -> str:
     """A compact, data-derived schema + quality briefing. Nothing here is hardcoded
     from the CSVs -- distinct values and fill rates are read off the live boards."""
+    if wh._schema_doc is not None:
+        return wh._schema_doc
     lines: list[str] = []
     for table, df in (("deals", wh.deals), ("work_orders", wh.work_orders)):
         q = wh.quality[table]
@@ -157,7 +160,9 @@ def schema_document(wh: Warehouse) -> str:
         for n in q.notes:
             lines.append(f"  ! {n}")
         lines.append("")
-    return "\n".join(lines)
+    doc = "\n".join(lines)
+    wh._schema_doc = doc
+    return doc
 
 
 def quality_summary(wh: Warehouse) -> dict:
