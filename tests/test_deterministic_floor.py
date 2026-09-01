@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 import pandas as pd
-from agent.agent import AgentTurn, answer_question, plan_and_execute
+from agent.agent import AgentTurn, _missing_row_provenance, answer_question, plan_and_execute
 from agent.llm import LLMError, UnifiedLLM
 from agent.templates import TEMPLATES, match_template
 from agent.warehouse import Warehouse, run_sql
@@ -107,6 +107,9 @@ def test_every_template_sql_executes_on_warehouse() -> None:
         df = run_sql(wh, template.sql)
         assert isinstance(df, pd.DataFrame), f"Template {template.id} did not return DataFrame"
         assert not df.empty, f"Template {template.id} returned 0 rows"
+        assert not _missing_row_provenance(template.sql, df), (
+            f"Template {template.id} returns row-level data without item_id provenance"
+        )
 
 
 def test_deterministic_floor_under_total_llm_outage() -> None:
