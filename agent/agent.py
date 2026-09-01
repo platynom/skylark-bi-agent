@@ -92,6 +92,9 @@ RULES
    wo_status_billed, or a fuzzy ILIKE match for this metric. A row-level result for this
    metric must include item_id, execution_status, billed_incl_gst, and amount_incl_gst so
    its pinned count and financial exposure can be verified and narrated consistently.
+   "Fully paid with zero outstanding balance" means billed_incl_gst > 0 AND
+   outstanding_incl_gst = 0. A zero-outstanding work order that was never billed is not
+   fully paid; do not count it for this metric.
 9. Ask a clarifying question ONLY when the answer would materially change depending on
    the interpretation AND you cannot state a reasonable default. Prefer answering with
    an explicit stated assumption over interrupting the user. Never ask more than one
@@ -554,4 +557,3 @@ def answer_question(
     if turn.action == "sql" and turn.result is not None and not turn.answer:
         turn.answer = narrate_turn(wh, turn, llm=llm, force_provider=force_provider)
     return turn
-
