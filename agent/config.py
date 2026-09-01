@@ -28,12 +28,17 @@ DEALS_BOARD_NAME = get("DEALS_BOARD_NAME", "Deals")
 WORK_ORDERS_BOARD_NAME = get("WORK_ORDERS_BOARD_NAME", "Work Orders")
 
 GEMINI_API_KEY = get("GEMINI_API_KEY")
-GEMINI_MODEL = get("GEMINI_MODEL", "gemini-3.1-flash-lite")
-GEMINI_FALLBACK_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-]
+GEMINI_MODEL = get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+# Provider redundancy comes from Vertex -> AI Studio, not from silently changing
+# models inside AI Studio. Both quota pools deliberately serve the same model.
+GEMINI_FALLBACK_MODELS: list[str] = []
+
+# Vertex AI provider. Keep these in the central secret lookup so local
+# Streamlit secrets and deployment environment variables behave identically.
+GCP_SERVICE_ACCOUNT_B64 = get("GCP_SERVICE_ACCOUNT_B64")
+GCP_PROJECT = get("GCP_PROJECT", "project-4f0f85f8-1fbe-4abe-b7e")
+VERTEX_REGION = get("VERTEX_REGION", "global")
+VERTEX_MODEL = get("VERTEX_MODEL", "gemini-3.5-flash-lite")
 
 CACHE_TTL_SECONDS = int(get("CACHE_TTL_SECONDS", 300))
 MAX_SQL_RETRIES = int(get("MAX_SQL_RETRIES", 2))

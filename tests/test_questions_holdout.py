@@ -219,10 +219,13 @@ def _v_q20(turn: AgentTurn) -> None:
     )
 
 def _v_q21(turn: AgentTurn) -> None:
-    # Fully paid work orders with zero outstanding: 125 orders (or sum = 138,599,252.88)
+    # "Fully paid" requires a real invoice as well as zero outstanding balance.
+    # There are 77 zero-outstanding work orders, but 63 were never billed; counting
+    # those as paid would confuse "not invoiced" with "paid in full". The correct
+    # definition is billed_incl_gst > 0 AND outstanding_incl_gst = 0, yielding 14.
     frame = _require_sql(turn)
-    assert any(_close(v, 125) or _close(v, 138599252.88, tol=1000.0) for row in frame.itertuples(index=False) for v in row if isinstance(v, (int, float)) and not isinstance(v, bool)), (
-        f"expected 125 zero-balance work orders; got {frame.to_dict('records')}"
+    assert any(_close(v, 14) for row in frame.itertuples(index=False) for v in row if isinstance(v, (int, float)) and not isinstance(v, bool)), (
+        f"expected 14 billed-and-fully-paid work orders; got {frame.to_dict('records')}"
     )
 
 def _v_q22(turn: AgentTurn) -> None:
@@ -476,6 +479,8 @@ def main() -> int:
         turn, was_cached = _execute_cached_or_live(
             wh, case.question, llm, cache, ph, use_cache=not args.no_cache
         )
+        if not was_cached:
+            time.sleep(0.8)
         cache_tag = "cached" if was_cached else "live"
         reason: str | None = None
 

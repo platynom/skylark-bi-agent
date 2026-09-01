@@ -54,6 +54,7 @@ class HistoryItem(BaseModel):
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=1000)
     history: list[HistoryItem] = Field(default_factory=list, max_length=20)
+    provider: str | None = Field(default=None, max_length=50)
 
 
 class NarrateRequest(BaseModel):
@@ -64,6 +65,7 @@ class NarrateRequest(BaseModel):
     rows: list[dict[str, Any]] = Field(default_factory=list)
     caveats: list[str] = Field(default_factory=list)
     history: list[HistoryItem] = Field(default_factory=list, max_length=20)
+    provider: str | None = Field(default=None, max_length=50)
 
 
 class LeadershipRequest(BaseModel):
@@ -148,6 +150,7 @@ def health(force: bool = Query(default=False)):
             "boards": wh.board_ids,
             "row_counts": {"deals": len(wh.deals), "work_orders": len(wh.work_orders)},
             "quality": quality_summary(wh),
+            "providers": Gemini.get_provider_status(),
             **_meta(load),
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
         }
@@ -155,12 +158,17 @@ def health(force: bool = Query(default=False)):
         return _safe_error(exc)
 
 
+@app.get("/api/providers")
+def providers():
+    return Gemini.get_provider_status()
+
+
 @app.post("/api/ask")
 def ask(request: AskRequest):
     started = time.perf_counter()
     try:
         norm_q = normalize_question(request.question)
-        if not request.history:
+        if not request.history and not request.provider:
             cached_resp = get_cached_question(norm_q)
             if cached_resp is not None:
                 return {
@@ -176,6 +184,7 @@ def ask(request: AskRequest):
             request.question.strip(),
             llm=llm,
             history=[item.model_dump() for item in request.history],
+            force_provider=request.provider,
         )
 
         caveats = _relevant_caveats(load.warehouse, turn.sql) if turn.sql else []
@@ -208,12 +217,15 @@ def ask(request: AskRequest):
             "clarify": turn.clarify,
             "options": turn.options,
             "error": turn.error,
-            "model": llm._working_model,
+            "provider": turn.provider,
+            "model": turn.model or llm._working_model,
+            "provider_chain_attempted": turn.provider_chain_attempted,
+            "providers_status": Gemini.get_provider_status(),
             **_meta(load),
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
         }
 
-        if not request.history and turn.action in ("sql", "unsupported") and turn.answer:
+        if not request.history and not request.provider and turn.action in ("sql", "unsupported") and turn.answer:
             set_cached_question(norm_q, response_data)
 
         return response_data
@@ -247,7 +259,13 @@ def narrate(request: NarrateRequest):
         )
 
         try:
-            answer = llm.generate(NARRATOR_SYSTEM, narrate_input, temperature=0.3, max_tokens=1200)
+            answer = llm.generate(
+                NARRATOR_SYSTEM,
+                narrate_input,
+                temperature=0.3,
+                max_tokens=1200,
+                force_provider=request.provider,
+            )
             if not narrated_currency_is_valid(answer, allowed_currency):
                 LOGGER.warning(
                     "Narrator emitted an INR value outside the server-provided allow-list"
@@ -262,7 +280,7 @@ def narrate(request: NarrateRequest):
             )
 
         # Update question cache with full response including narrative prose
-        if not request.history and request.sql:
+        if not request.history and not request.provider and request.sql:
             norm_q = normalize_question(request.question)
             full_cached_resp = {
                 "action": "sql",
@@ -278,13 +296,17 @@ def narrate(request: NarrateRequest):
                 "clarify": None,
                 "options": [],
                 "error": None,
+                "provider": llm.last_provider,
                 "model": llm._working_model,
+                "provider_chain_attempted": llm.last_chain,
             }
             set_cached_question(norm_q, full_cached_resp)
 
         return {
             "answer": answer,
+            "provider": llm.last_provider,
             "model": llm._working_model,
+            "provider_chain_attempted": llm.last_chain,
             "latency_ms": round((time.perf_counter() - started) * 1000, 1),
         }
     except Exception as exc:  # noqa: BLE001

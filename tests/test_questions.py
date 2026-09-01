@@ -593,6 +593,8 @@ def main() -> int:
         turn, was_cached = _execute_cached_or_live(
             wh, case.question, llm, cache, current_hash, use_cache=not args.no_cache
         )
+        if not was_cached:
+            time.sleep(0.8)
         cache_tag = "cached" if was_cached else "live"
         reason: str | None = None
 
