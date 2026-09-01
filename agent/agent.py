@@ -22,7 +22,8 @@ from typing import Any
 import pandas as pd
 
 from . import config
-from .llm import Gemini, LLMError
+from .llm import Gemini, LLMError, UnifiedLLM
+from .templates import TEMPLATE_MATCH_THRESHOLD, match_template
 from .warehouse import UnsafeQuery, Warehouse, run_sql, schema_document
 
 LOGGER = logging.getLogger("skylark.agent")
@@ -406,6 +407,43 @@ def deterministic_narration_fallback(
     return summary
 
 
+def _handle_deterministic_floor(
+    wh: Warehouse, turn: AgentTurn, question: str, llm: Gemini | None = None
+) -> AgentTurn:
+    """Fallback handler when live LLM capacity across all providers is exhausted.
+
+    A threshold of 0.35 ensures that queries with at least two matching core domain
+    keywords trigger the appropriate precomputed template while avoiding false positives
+    on ambiguous or out-of-scope queries.
+    """
+    turn.provider = "deterministic"
+    turn.model = None
+    turn.provider_chain_attempted = getattr(llm, "last_chain", []) if llm else []
+    turn.latency_ms = getattr(llm, "last_latency_ms", 0.0) if llm else 0.0
+
+    template, score = match_template(question)
+    if template and score >= TEMPLATE_MATCH_THRESHOLD:
+        try:
+            df = run_sql(wh, template.sql)
+            turn.action = "sql"
+            turn.sql = template.sql
+            turn.intent = template.intent
+            turn.result = df
+            turn.assumptions = [
+                "Answer generated from deterministic query template because live model capacity was exhausted."
+            ]
+            return turn
+        except Exception as sql_exc:
+            LOGGER.warning("Deterministic template execution failed: %s", sql_exc)
+
+    turn.action = "unsupported"
+    turn.answer = (
+        "Live AI model capacity is currently exhausted across all providers, and this "
+        "question does not match a standard precomputed template. Please retry in a moment."
+    )
+    return turn
+
+
 def plan_and_execute(
     wh: Warehouse,
     question: str,
@@ -432,12 +470,8 @@ def plan_and_execute(
         turn.provider_chain_attempted = getattr(llm, "last_chain", [])
         turn.latency_ms = getattr(llm, "last_latency_ms", 0.0)
     except LLMError as exc:
-        turn.provider = getattr(llm, "last_provider", "deterministic")
-        turn.model = getattr(llm, "last_model", None)
-        turn.provider_chain_attempted = getattr(llm, "last_chain", [])
-        turn.latency_ms = getattr(llm, "last_latency_ms", 0.0)
-        turn.action, turn.error = "error", str(exc)
-        return turn
+        LOGGER.warning("Planner LLM call failed across all providers (%s); falling back to deterministic floor", exc)
+        return _handle_deterministic_floor(wh, turn, question, llm=llm)
 
     action = str(plan.get("action", "sql")).lower()
     turn.action = action
@@ -482,8 +516,8 @@ def plan_and_execute(
             try:
                 plan = llm.generate_json(PLANNER_SYSTEM, repair, temperature=0.0, force_provider=force_provider)
             except LLMError as exc2:
-                last_error = str(exc2)
-                break
+                LOGGER.warning("SQL repair LLM call failed across all providers (%s); falling back to deterministic floor", exc2)
+                return _handle_deterministic_floor(wh, turn, question, llm=llm)
             sql = (plan.get("sql") or "").strip()
 
     if df is None:
@@ -508,6 +542,17 @@ def narrate_turn(
         return turn.answer or ""
     llm = llm or Gemini()
     df = turn.result
+
+    # If all live LLM providers are throttled or on standby, skip the LLM call directly
+    provider_status = UnifiedLLM.get_provider_status()
+    live_providers = [
+        info for name, info in provider_status.items()
+        if name != "deterministic"
+    ]
+    if live_providers and all(info.get("status") in {"throttled", "standby"} for info in live_providers):
+        LOGGER.info("All live LLM providers are throttled/standby; returning deterministic narration directly.")
+        return deterministic_narration_fallback(df, turn.intent, turn.assumptions)
+
     caveats = _relevant_caveats(wh, turn.sql)
 
     preview, allowed_currency, currency_block = prepare_narrator_result(
