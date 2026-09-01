@@ -17,6 +17,21 @@ type Tab = "ask" | "leadership" | "data";
 type Row = Record<string, unknown>;
 type ProviderOption = "auto" | "vertex" | "ai_studio" | "deterministic";
 
+const TAB_EXPLAINERS: Record<Tab, { title: string; description: string }> = {
+  ask: {
+    title: "Ask the business",
+    description: "Ask founder questions in plain language. Each answer includes the SQL and result rows behind it.",
+  },
+  leadership: {
+    title: "Leadership update",
+    description: "Generate an executive-ready update covering pipeline, revenue, receivables, and operational risks.",
+  },
+  data: {
+    title: "Normalized data",
+    description: "Inspect the cleaned Deals and Work Orders tables that the agent queries for every answer.",
+  },
+};
+
 type TableQuality = {
   board: string; board_id: string; rows: number; dropped_header_rows: number;
   unusable_columns: string[]; low_coverage: Record<string, number>;
@@ -240,6 +255,7 @@ function Sidebar({ health, loading, refresh }: { health: Health | null; loading:
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("ask");
+  const [tabExplainer, setTabExplainer] = useState<Tab | null>(null);
   const [selectedProvider, setSelectedProvider] = useState<ProviderOption>("auto");
   const [health, setHealth] = useState<Health | null>(null);
   const [healthError, setHealthError] = useState("");
@@ -262,6 +278,11 @@ export default function Home() {
     finally { setLoadingHealth(false); }
   }, []);
   useEffect(() => { void loadHealth(); }, [loadHealth]);
+  useEffect(() => {
+    if (!tabExplainer) return;
+    const timeout = window.setTimeout(() => setTabExplainer(null), 3200);
+    return () => window.clearTimeout(timeout);
+  }, [tabExplainer]);
 
   const sendQuestion = async (text: string) => {
     const clean = text.trim();
@@ -365,6 +386,12 @@ export default function Home() {
     ["ask", "Ask"], ["leadership", "Leadership update"], ["data", "Data"]
   ] as [Tab, string][]), []);
 
+  const selectTab = (nextTab: Tab) => {
+    if (nextTab === tab) return;
+    setTab(nextTab);
+    setTabExplainer(nextTab);
+  };
+
   return (
     <div className="min-h-screen flex flex-col lg:flex-row">
       <Sidebar health={health} loading={loadingHealth} refresh={() => void loadHealth(true)} />
@@ -378,7 +405,7 @@ export default function Home() {
 
           <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between w-full">
             <nav className="flex gap-1 overflow-x-auto rounded-2xl border border-forest/10 bg-white p-1.5 shadow-sm">
-              {tabs.map(([key, label]) => <button key={key} onClick={() => setTab(key)} className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-semibold transition ${tab === key ? "bg-forest text-white shadow-sm" : "text-slate-500 hover:bg-mint/40 hover:text-forest"}`}>{label}</button>)}
+              {tabs.map(([key, label]) => <button key={key} onClick={() => selectTab(key)} className={`whitespace-nowrap rounded-xl px-5 py-2.5 text-sm font-semibold transition ${tab === key ? "bg-forest text-white shadow-sm" : "text-slate-500 hover:bg-mint/40 hover:text-forest"}`}>{label}</button>)}
             </nav>
 
             {tab === "ask" && (
@@ -493,6 +520,14 @@ export default function Home() {
           </section>}
         </div>
       </main>
+      {tabExplainer && <div className="fixed inset-0 z-50 flex items-center justify-center bg-forest/10 p-5" role="status" aria-live="polite">
+        <div className="relative max-w-md rounded-2xl border border-forest/15 bg-white p-6 pr-12 shadow-2xl">
+          <p className="text-[10px] font-bold uppercase tracking-[.22em] text-moss">You are in {tabExplainer === "ask" ? "Ask" : tabExplainer === "leadership" ? "Leadership update" : "Data"}</p>
+          <h2 className="mt-2 text-xl font-black text-forest">{TAB_EXPLAINERS[tabExplainer].title}</h2>
+          <p className="mt-2 text-sm leading-relaxed text-slate-600">{TAB_EXPLAINERS[tabExplainer].description}</p>
+          <button onClick={() => setTabExplainer(null)} aria-label="Dismiss tab description" className="absolute right-3 top-3 grid h-8 w-8 place-items-center rounded-lg text-slate-400 transition hover:bg-paper hover:text-forest">&#215;</button>
+        </div>
+      </div>}
     </div>
   );
 }
