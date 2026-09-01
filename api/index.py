@@ -10,7 +10,7 @@ import time
 from typing import Any, Literal
 
 import pandas as pd
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request as FastAPIRequest
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
@@ -164,7 +164,7 @@ def providers():
 
 
 @app.post("/api/ask")
-def ask(request: AskRequest):
+def ask(request: AskRequest, http_request: FastAPIRequest):
     started = time.perf_counter()
     try:
         norm_q = normalize_question(request.question)
@@ -178,7 +178,7 @@ def ask(request: AskRequest):
                 }
 
         load = get_warehouse()
-        llm = Gemini()
+        llm = Gemini(vercel_oidc_token=http_request.headers.get("x-vercel-oidc-token"))
         turn = plan_and_execute(
             load.warehouse,
             request.question.strip(),
@@ -234,10 +234,10 @@ def ask(request: AskRequest):
 
 
 @app.post("/api/narrate")
-def narrate(request: NarrateRequest):
+def narrate(request: NarrateRequest, http_request: FastAPIRequest):
     started = time.perf_counter()
     try:
-        llm = Gemini()
+        llm = Gemini(vercel_oidc_token=http_request.headers.get("x-vercel-oidc-token"))
 
         df = pd.DataFrame.from_records(request.rows)
         preview, allowed_currency, currency_block = prepare_narrator_result(
@@ -314,11 +314,11 @@ def narrate(request: NarrateRequest):
 
 
 @app.post("/api/leadership")
-def leadership(request: LeadershipRequest):
+def leadership(request: LeadershipRequest, http_request: FastAPIRequest):
     started = time.perf_counter()
     try:
         load = get_warehouse()
-        llm = LeadershipGemini()
+        llm = LeadershipGemini(vercel_oidc_token=http_request.headers.get("x-vercel-oidc-token"))
         narrative, metrics = generate_update(load.warehouse, llm=llm, focus=request.focus)
         return {
             "narrative": narrative, "metrics": _clean_nan(metrics), "model": llm._working_model,

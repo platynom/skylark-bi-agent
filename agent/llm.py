@@ -24,6 +24,7 @@ import requests
 try:
     import google.auth
     import google.auth.transport.requests
+    from google.auth import identity_pool
     from google.oauth2 import service_account
     _HAS_GOOGLE_AUTH = True
 except ImportError:
@@ -98,7 +99,7 @@ class VertexAuthManager:
         self._token: str | None = None
         self._expiry: float = 0.0
 
-    def get_token(self) -> str | None:
+    def get_token(self, vercel_oidc_token: str | None = None) -> str | None:
         now = time.time()
         if self._token and (self._expiry - now) > 300:  # 5 min buffer
             return self._token
@@ -108,20 +109,60 @@ class VertexAuthManager:
             if self._token and (self._expiry - now) > 300:
                 return self._token
 
-            token, expiry = self._mint_token()
+            token, expiry = self._mint_token(vercel_oidc_token)
             if token:
                 self._token = token
                 self._expiry = expiry
                 return token
             return None
 
-    def _mint_token(self) -> tuple[str | None, float]:
+    def _mint_token(self, vercel_oidc_token: str | None = None) -> tuple[str | None, float]:
         if not _HAS_GOOGLE_AUTH:
             return None, 0.0
 
         now = time.time()
 
-        # 1. Base64 Service Account JSON in env
+        # 1. Vercel OIDC -> GCP Workload Identity Federation -> service-account
+        # impersonation. The OIDC JWT is supplied per request by Vercel and is
+        # never persisted or logged.
+        wif_values = (
+            config.GCP_PROJECT_NUMBER,
+            config.GCP_SERVICE_ACCOUNT_EMAIL,
+            config.GCP_WORKLOAD_IDENTITY_POOL_ID,
+            config.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID,
+        )
+        if vercel_oidc_token and all(wif_values):
+            try:
+                class _VercelTokenSupplier(identity_pool.SubjectTokenSupplier):
+                    def get_subject_token(self, context, request):
+                        return vercel_oidc_token
+
+                audience = (
+                    "//iam.googleapis.com/projects/"
+                    f"{config.GCP_PROJECT_NUMBER}/locations/global/workloadIdentityPools/"
+                    f"{config.GCP_WORKLOAD_IDENTITY_POOL_ID}/providers/"
+                    f"{config.GCP_WORKLOAD_IDENTITY_POOL_PROVIDER_ID}"
+                )
+                impersonation_url = (
+                    "https://iamcredentials.googleapis.com/v1/projects/-/serviceAccounts/"
+                    f"{config.GCP_SERVICE_ACCOUNT_EMAIL}:generateAccessToken"
+                )
+                creds = identity_pool.Credentials(
+                    audience=audience,
+                    subject_token_type="urn:ietf:params:oauth:token-type:jwt",
+                    token_url="https://sts.googleapis.com/v1/token",
+                    service_account_impersonation_url=impersonation_url,
+                    subject_token_supplier=_VercelTokenSupplier(),
+                    scopes=["https://www.googleapis.com/auth/cloud-platform"],
+                )
+                req = google.auth.transport.requests.Request()
+                creds.refresh(req)
+                expiry = creds.expiry.timestamp() if getattr(creds, "expiry", None) else now + 3600
+                return creds.token, expiry
+            except Exception as exc:
+                LOGGER.warning("Vercel Workload Identity token exchange failed: %s", type(exc).__name__)
+
+        # 2. Base64 Service Account JSON in env (legacy/local compatibility)
         sa_b64 = config.GCP_SERVICE_ACCOUNT_B64
         if sa_b64:
             try:
@@ -137,7 +178,7 @@ class VertexAuthManager:
             except Exception as exc:
                 LOGGER.warning("Failed to mint token from GCP_SERVICE_ACCOUNT_B64: %s", exc)
 
-        # 2. Application Default Credentials (ADC) or local gcloud auth
+        # 3. Application Default Credentials (ADC) or local gcloud auth
         try:
             creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
             req = google.auth.transport.requests.Request()
@@ -180,12 +221,14 @@ class UnifiedLLM:
         vertex_region: str | None = None,
         vertex_project: str | None = None,
         vertex_model: str | None = None,
+        vercel_oidc_token: str | None = None,
     ):
         self.api_key = api_key or config.GEMINI_API_KEY
         self.ai_studio_model = model or config.GEMINI_MODEL or "gemini-2.5-flash"
         self.vertex_region = vertex_region or config.VERTEX_REGION
         self.vertex_project = vertex_project or config.GCP_PROJECT
         self.vertex_model = vertex_model or config.VERTEX_MODEL
+        self.vercel_oidc_token = vercel_oidc_token
 
         if UnifiedLLM._session is None:
             UnifiedLLM._session = requests.Session()
@@ -224,7 +267,7 @@ class UnifiedLLM:
         json_mode: bool,
         deadline: float,
     ) -> str:
-        token = self._auth_mgr.get_token()
+        token = self._auth_mgr.get_token(self.vercel_oidc_token)
         if not token:
             raise LLMError("Vertex AI credentials not available (no token).")
 

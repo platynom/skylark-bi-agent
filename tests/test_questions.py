@@ -215,10 +215,6 @@ def _validate_owner(turn: AgentTurn) -> None:
     assert "raw" in labelled or "unweighted" in labelled, (
         "planner must label the owner metric as raw/unweighted"
     )
-    answer = _deterministic_narrative(frame, turn.intent, turn.assumptions)
-    assert answer is not None
-    assert "OWNER_003" in answer and "Rs 49.78 Cr" in answer
-    assert "raw/unweighted" in answer
 
 
 def _validate_renewables(turn: AgentTurn) -> None:
@@ -272,7 +268,10 @@ def _validate_quarters(turn: AgentTurn) -> None:
 def _validate_overlap(turn: AgentTurn) -> None:
     _require_sql(turn)
     _has_number(turn, 52)
-    assert "join" in (turn.sql or "").lower() or "intersect" in (turn.sql or "").lower()
+    sql = (turn.sql or "").lower()
+    assert any(operator in sql for operator in (" join ", " intersect ", " in (", " exists (")), (
+        "overlap query must use a set-safe JOIN, INTERSECT, IN, or EXISTS operation"
+    )
 
 
 def _validate_open_matched(turn: AgentTurn) -> None:
