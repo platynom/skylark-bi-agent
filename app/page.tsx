@@ -76,6 +76,22 @@ function StatusPill({ value }: { value: string }) {
   );
 }
 
+function LiveConnectionPill({ value }: { value: string }) {
+  const isLiveFetch = value === "miss";
+  const label = value === "hit" ? "CACHED" : isLiveFetch ? "LIVE FETCH" : value;
+
+  return (
+    <span
+      title="LIVE FETCH = pulled fresh from monday.com. CACHED = served from the warehouse snapshot."
+      className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${
+        isLiveFetch ? "bg-mint/20 text-mint" : "bg-white/10 text-white/60"
+      }`}
+    >
+      {label}
+    </span>
+  );
+}
+
 function ProviderBadge({ result }: { result: AskResult }) {
   const provider = result.provider || "vertex";
   const latency = (result.latency_ms / 1000).toFixed(1);
@@ -194,7 +210,7 @@ function Sidebar({ health, loading, refresh }: { health: Health | null; loading:
             <code className="mt-1 block text-[10px] text-white/45">{table.board_id}</code>
           </div>
         )) : <p className="text-sm text-white/50">{loading ? "Reading live boards…" : "Connection unavailable"}</p>}
-        {health && <div className="mt-3 flex items-center justify-between text-xs text-white/60"><span>{Math.round(health.data_age_seconds)}s old</span><StatusPill value={health.cache} /></div>}
+        {health && <div className="mt-3 flex items-center justify-between text-xs text-white/60"><span>{Math.round(health.data_age_seconds)}s old</span><LiveConnectionPill value={health.cache} /></div>}
         <button onClick={refresh} disabled={loading} className="mt-4 w-full rounded-xl bg-mint px-3 py-2.5 text-sm font-bold text-forest transition hover:bg-white disabled:opacity-50">{loading ? "Refreshing…" : "Refresh from monday.com"}</button>
       </section>
 
